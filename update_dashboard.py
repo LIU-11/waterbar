@@ -438,6 +438,24 @@ def extract_data(xlsx_path):
 
     # 7. 确定可用日期列表 (从日度数据中找出有数据的日期)
     available_dates_current = sorted(current_data.keys())
+
+    # 7b. 精简 yoy_data / wow_data：只保留实际需要的日期
+    #     需要的日期 = date_mapping 中的 yoy/wow 日期 ± 7天（覆盖周度对比）
+    needed_yoy_dates = set()
+    needed_wow_dates = set()
+    for m in daily_map.values():
+        if m.get("yoy_date"):
+            d = parse_date_obj(m["yoy_date"])
+            if d:
+                for i in range(-7, 8):
+                    needed_yoy_dates.add((d + datetime.timedelta(days=i)).strftime("%Y-%m-%d"))
+        if m.get("wow_date"):
+            d = parse_date_obj(m["wow_date"])
+            if d:
+                for i in range(-7, 8):
+                    needed_wow_dates.add((d + datetime.timedelta(days=i)).strftime("%Y-%m-%d"))
+    yoy_data = {k: v for k, v in yoy_data.items() if k in needed_yoy_dates}
+    wow_data = {k: v for k, v in wow_data.items() if k in needed_wow_dates}
     available_dates_yoy = sorted(yoy_data.keys())
     available_dates_wow = sorted(wow_data.keys())
 

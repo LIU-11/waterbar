@@ -4034,7 +4034,7 @@ def generate_html(data, output_path, external_data=False):
         # 同时输出 dashboard_data.json
         json_path = os.path.join(os.path.dirname(output_path), 'dashboard_data.json')
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
         print(f"  外部数据文件: {json_path}")
 
     return output_path
