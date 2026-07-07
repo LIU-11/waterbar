@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 *.tmp
 ~$*
+github_token.txt
+config.json

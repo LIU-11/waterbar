@@ -24,8 +24,14 @@ XLSX_FILENAME = "7月杯数达成看板-墨柠.xlsx"
 # GitHub 配置
 GITHUB_USERNAME = "summerrain620"
 REPO_NAME = "waterbar"
-GITHUB_TOKEN = ""  # <-- 在这里填入你的 GitHub Personal Access Token
 GITHUB_PAGES_URL = f"https://{GITHUB_USERNAME}.github.io/{REPO_NAME}/"
+
+# Token 从 github_token.txt 读取（该文件已 gitignore，不会推送到 GitHub）
+_TOKEN_FILE = os.path.join(REPO_DIR, "github_token.txt")
+GITHUB_TOKEN = ""
+if os.path.exists(_TOKEN_FILE):
+    with open(_TOKEN_FILE, "r", encoding="utf-8") as _f:
+        GITHUB_TOKEN = _f.read().strip()
 
 # 日志文件
 LOG_FILE = os.path.join(REPO_DIR, "auto_refresh.log")
