@@ -22,7 +22,7 @@ GEN_SCRIPT = os.path.join(REPO_DIR, "gen_dashboard.py")
 XLSX_FILENAME = "7月杯数达成看板-墨柠.xlsx"
 
 # GitHub 配置
-GITHUB_USERNAME = "summerrain620"
+GITHUB_USERNAME = "LIU-11"
 REPO_NAME = "waterbar"
 GITHUB_PAGES_URL = f"https://{GITHUB_USERNAME}.github.io/{REPO_NAME}/"
 
