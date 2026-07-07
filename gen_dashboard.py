@@ -1,0 +1,4070 @@
+#!/usr/bin/env python3
+"""
+gen_dashboard.py - 从JSON数据生成7月杯数看板HTML
+
+用法: python gen_dashboard.py <json_path>
+"""
+
+import sys
+import os
+import json
+import datetime
+
+HTML_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>7月杯数达成看板 - 墨柠</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+/* ===== 全局样式 ===== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    background: #f5f6fa;
+    color: #2c3e50;
+    line-height: 1.6;
+}
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+/* ===== 头部标题 ===== */
+.sticky-top {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: #f5f6fa;
+    padding-top: 0;
+    margin-top: -20px;
+}
+.sticky-top-pad {
+    height: 16px;
+}
+.header {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #fff;
+    padding: 14px 32px;
+    border-radius: 12px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.header h1 { font-size: 24px; font-weight: 600; }
+.header .subtitle { font-size: 14px; color: #a0aec0; margin-top: 4px; }
+
+/* ===== 导航标签 ===== */
+.nav-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 0;
+    background: #fff;
+    padding: 8px 12px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.nav-tab {
+    padding: 10px 24px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s;
+    border: none;
+    background: #f0f0f5;
+    color: #666;
+}
+.nav-tab:hover { background: #e8e8f0; }
+.nav-tab.active { background: #1a1a2e; color: #fff; }
+
+/* ===== 汇总卡片 ===== */
+.cards-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    position: relative;
+    overflow: hidden;
+}
+.card::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 5px;
+    background: #3498db;
+}
+.card.negative::before { background: #c0392b; }
+.card.positive::before { background: #1e8449; }
+.card-title { font-size: 12px; color: #888; margin-bottom: 8px; }
+.card-value { font-size: 28px; font-weight: 700; color: #2c3e50; }
+.card-sub { font-size: 11px; color: #999; margin-top: 4px; }
+.card.negative .card-value { color: #c0392b; }
+.card.positive .card-value { color: #1e8449; }
+
+/* ===== 日目标卡片（dt-summary-cards / dt-monthly-cards） ===== */
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
+    margin-bottom: 16px;
+}
+.summary-card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 18px 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    position: relative;
+    overflow: hidden;
+}
+.summary-card::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 5px;
+    background: #3498db;
+}
+.summary-card.card-blue::before { background: #3498db; }
+.summary-card.card-green::before { background: #1e8449; }
+.summary-card.card-purple::before { background: #8e44ad; }
+.summary-card.card-orange::before { background: #e67e22; }
+.summary-label {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 8px;
+}
+.summary-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: #2c3e50;
+}
+.summary-card.val-positive-strong { background: #f0fdf0; }
+.summary-card.val-positive-strong::before { background: #1e8449; }
+.summary-card.val-positive-strong .summary-value { color: #1e8449; }
+.summary-card.val-positive { background: #f0fdf0; }
+.summary-card.val-positive::before { background: #1e8449; }
+.summary-card.val-positive .summary-value { color: #1e8449; }
+.summary-card.val-warn { background: #fef5e7; }
+.summary-card.val-warn::before { background: #e67e22; }
+.summary-card.val-warn .summary-value { color: #d35400; }
+.summary-card.val-negative { background: #fdf0f0; }
+.summary-card.val-negative::before { background: #c0392b; }
+.summary-card.val-negative .summary-value { color: #c0392b; }
+.summary-card.val-neutral { color: #888; }
+.summary-card .summary-sub {
+    font-size: 12px;
+    color: #999;
+    margin-top: 6px;
+    font-weight: 400;
+}
+.summary-card .summary-sub strong {
+    color: inherit;
+    font-weight: 600;
+}
+
+/* ===== 筛选栏 ===== */
+.filters-bar {
+    background: #fff;
+    padding: 16px 20px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    margin-bottom: 24px;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.filter-group { display: flex; align-items: center; gap: 6px; }
+.filter-label { font-size: 13px; color: #666; font-weight: 500; }
+.filter-select {
+    padding: 6px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 13px;
+    background: #fff;
+    min-width: 120px;
+}
+.filter-select[multiple] {
+    min-width: 240px;
+    max-width: 320px;
+    height: auto;
+    padding: 4px;
+}
+.filter-select[multiple] option {
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+.filter-select[multiple] option:checked {
+    background: linear-gradient(0deg, #2c3e50 0%, #2c3e50 100%);
+    color: #fff;
+}
+.combo-wrapper { position: relative; min-width: 120px; }
+.combo-input { width: 100%; cursor: pointer; box-sizing: border-box; padding-right: 28px; }
+.combo-wrapper::after {
+    content: "";
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-30%);
+    border: 5px solid transparent;
+    border-top: 6px solid #999;
+    pointer-events: none;
+}
+.combo-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 250px;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 100;
+    margin-top: 2px;
+}
+.combo-dropdown.show { display: block; }
+.combo-option {
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.combo-option:hover, .combo-option.active { background: #f0f4ff; }
+.combo-option.no-match { color: #999; cursor: default; }
+.combo-option.no-match:hover { background: none; }
+
+/* ===== 门店明细表筛选（单选下拉，与顶部筛选栏样式一致） ===== */
+.daily-detail-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+    padding: 14px 20px;
+    margin-bottom: 14px;
+    background: #fafbfc;
+    border: 1px solid #e8eaed;
+    border-radius: 8px;
+}
+.daily-detail-filters .dd-filter-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.daily-detail-filters .dd-filter-label {
+    font-size: 13px;
+    color: #666;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.daily-detail-filters .dd-filter-label .dd-filter-count {
+    color: #999;
+    font-weight: 400;
+    margin-left: 2px;
+}
+.daily-detail-filters .dd-select {
+    padding: 6px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 13px;
+    background: #fff;
+    min-width: 130px;
+    color: #2c3e50;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s ease;
+}
+.daily-detail-filters .dd-select:focus {
+    border-color: #2c3e50;
+}
+.daily-detail-filters .dd-select.warn-select.has-value {
+    color: #c0392b;
+    font-weight: 500;
+}
+.daily-detail-filters .dd-filter-actions {
+    margin-left: auto;
+}
+.daily-detail-filters .dd-action-btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-family: inherit;
+    border: 1px solid #d8dde5;
+    background: #fff;
+    color: #555;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.daily-detail-filters .dd-action-btn:hover {
+    border-color: #2c3e50;
+    color: #2c3e50;
+}
+
+/* ===== 门店搜索 combobox ===== */
+.daily-detail-filters .dd-combobox {
+    position: relative;
+    display: inline-block;
+    min-width: 200px;
+}
+.daily-detail-filters .dd-combobox-input {
+    width: 100%;
+    padding: 6px 26px 6px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 13px;
+    background: #fff;
+    color: #2c3e50;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s ease;
+    box-sizing: border-box;
+}
+.daily-detail-filters .dd-combobox-input:focus {
+    border-color: #2c3e50;
+}
+.daily-detail-filters .dd-combobox-input.has-value {
+    color: #2c3e50;
+    font-weight: 500;
+    border-color: #2c3e50;
+}
+.daily-detail-filters .dd-combobox-caret {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #999;
+    font-size: 11px;
+    pointer-events: none;
+    line-height: 1;
+}
+.daily-detail-filters .dd-combobox-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    max-height: 320px;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #d8dde5;
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    min-width: 240px;
+}
+.daily-detail-filters .dd-combobox-dropdown.open {
+    display: block;
+}
+.daily-detail-filters .dd-combobox-optgroup-label {
+    padding: 6px 12px 4px;
+    font-size: 11px;
+    color: #999;
+    font-weight: 600;
+    background: #fafbfc;
+    border-top: 1px solid #f0f2f5;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.daily-detail-filters .dd-combobox-optgroup-label:first-child {
+    border-top: none;
+}
+.daily-detail-filters .dd-combobox-item {
+    padding: 7px 12px;
+    font-size: 13px;
+    color: #2c3e50;
+    cursor: pointer;
+    line-height: 1.4;
+    user-select: none;
+    transition: background 0.1s ease;
+}
+.daily-detail-filters .dd-combobox-item:hover,
+.daily-detail-filters .dd-combobox-item.active {
+    background: #eef3f8;
+}
+.daily-detail-filters .dd-combobox-item.selected {
+    background: #2c3e50;
+    color: #fff;
+    font-weight: 500;
+}
+.daily-detail-filters .dd-combobox-item .dd-item-sub {
+    color: #999;
+    font-size: 11px;
+    margin-left: 6px;
+}
+.daily-detail-filters .dd-combobox-item.selected .dd-item-sub {
+    color: rgba(255, 255, 255, 0.7);
+}
+.daily-detail-filters .dd-combobox-empty {
+    padding: 16px 12px;
+    font-size: 13px;
+    color: #999;
+    text-align: center;
+}
+.daily-detail-filters .dd-combobox-clear {
+    position: absolute;
+    right: 22px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #bbb;
+    font-size: 14px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 4px;
+    display: none;
+    user-select: none;
+}
+.daily-detail-filters .dd-combobox-clear:hover {
+    color: #2c3e50;
+}
+.daily-detail-filters .dd-combobox-input.has-value ~ .dd-combobox-clear {
+    display: block;
+}
+
+/* ===== 模块区域 ===== */
+.module-section { display: none; }
+.module-section.active { display: block; }
+
+/* ===== Demo提示 ===== */
+.demo-banner {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    color: #856404;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.demo-banner strong { font-size: 16px; }
+
+/* ===== 柱状图区域 ===== */
+.charts-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 24px;
+}
+.chart-box {
+    background: #fff;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    margin-bottom: 0;
+}
+.chart-box h3 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #2c3e50; }
+@media (max-width: 1100px) {
+    .charts-row { grid-template-columns: 1fr; }
+}
+
+/* ===== 维度对比表（区经理/大店长） ===== */
+.table-wrap { overflow-x: auto; position: relative; }
+.group-table { width: auto; border-collapse: collapse; font-size: 13px; }
+.group-table thead th {
+    background: #f7f9fc;
+    color: #2c3e50;
+    padding: 9px 8px;
+    border: 1px solid #e6ebf2;
+    text-align: center;
+    font-weight: 600;
+    white-space: nowrap;
+    font-size: 13px;
+    position: sticky;
+    top: 32px;
+    z-index: 4;
+}
+.group-table tbody td.wk-sticky-1,
+.group-table tbody td.wk-sticky-2 {
+    position: sticky;
+    left: 0;
+    background: #fff;
+    z-index: 1;
+    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.05);
+}
+.group-table thead th.wk-sticky-1,
+.group-table thead th.wk-sticky-2 {
+    top: 0;
+    z-index: 6;
+}
+.group-table thead .group-row th {
+    background: #2c3e50;
+    color: #fff;
+    font-size: 13px;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+}
+/* 副标题日期行（与周度表对齐） */
+.group-table thead th.sub-date {
+    font-size: 11px;
+    font-weight: 400;
+    color: #888;
+    padding: 2px 6px 8px 6px;
+    background: #f7f9fc;
+}
+/* 每日对比表：隐藏日期副标题行 */
+.group-table thead tr.sub-date-row { display: none; }
+.group-table tbody td {
+    padding: 8px 8px;
+    border: 1px solid #eef1f5;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    position: relative;
+}
+/* 数字列最小宽度（与周度表对齐） */
+.group-table tbody td.col-num,
+.group-table thead th.col-num {
+    min-width: 80px;
+}
+.group-table tbody td.sticky-col {
+    text-align: center;
+    font-weight: 600;
+    color: #2c3e50;
+    background: #f0f2f5;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    min-width: 80px;
+    padding: 8px 10px;
+    font-size: 13px;
+}
+.group-table thead th.sticky-col {
+    min-width: 60px;
+    padding: 8px 8px;
+}
+.group-table tbody tr:hover td { background: #f5f7fa; }
+.group-table tbody tr:hover td.sticky-col { background: #eef2f7; }
+.group-table tbody tr:hover td.sticky-col-2 { background: #eef2f7; }
+.group-table .cell-pos { background: #f0fdf0; color: #1e8449; font-weight: 600; }
+.group-table .cell-neg { background: #fdf0f0; color: #c0392b; font-weight: 600; }
+
+/* 大店长表"区经理"列（左侧次级 sticky）+ 主 sticky 列右移 */
+.group-table thead th.sticky-col-2 {
+    position: sticky; left: 0; z-index: 4;
+    background: #2c3e50; color: #fff;
+    font-size: 13px; font-weight: 600;
+    text-align: center; vertical-align: middle;
+    border-right: 1px solid #4a5d75;
+    min-width: 80px;
+}
+.group-table tbody td.sticky-col-2 {
+    position: sticky; left: 0; z-index: 2;
+    background: #f0f2f5;
+    border-right: 1px solid #d8dde5;
+    font-weight: 600; color: #2c3e50;
+    min-width: 80px;
+    text-align: center;
+    padding: 8px 10px;
+    font-size: 13px;
+}
+.group-table thead th.sticky-col-2 + th.sticky-col {
+    left: 80px;
+}
+.group-table tbody td.sticky-col-2 + td.sticky-col {
+    left: 60px;
+}
+
+/* 单店周度对比表表头颜色、表格颜色、文字对齐方式、列宽，都跟大店长周度对比表一样（共用weekly-table样式） */
+
+
+/* ===== 门店明细表 ===== */
+.table-box {
+    background: #fff;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.table-box h3 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #2c3e50; }
+/* 门店明细表内置独立滚动容器 */
+.table-scroll-wrap {
+    max-height: 70vh;
+    overflow: auto;
+    position: relative;
+    border: 1px solid #e8eaed;
+    border-radius: 6px;
+}
+.table-box h3 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #2c3e50; }
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+thead th {
+    background: #f0f2f5;
+    padding: 10px 8px;
+    text-align: center;
+    font-weight: 600;
+    color: #444;
+    white-space: nowrap;
+}
+thead th[rowspan] {
+    border-bottom: none;
+}
+#dt-sm-table thead th, #dt-store-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+}
+#dt-dm-table th, #dt-dm-table td,
+#dt-sm-table th, #dt-sm-table td,
+#dt-store-table th, #dt-store-table td {
+    border-right: 1px solid #e8e8e8;
+}
+#dt-dm-table th:last-child, #dt-dm-table td:last-child,
+#dt-sm-table th:last-child, #dt-sm-table td:last-child,
+#dt-store-table th:last-child, #dt-store-table td:last-child {
+    border-right: none;
+}
+/* 门店明细表：垂直滚动时冻结双层表头 */
+#daily-table thead tr:nth-child(1) th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: #f0f2f5;
+}
+#daily-table thead tr:nth-child(2) th {
+    position: sticky;
+    top: 38px; /* 第一行表头高度 */
+    z-index: 10;
+    background: #f0f2f5;
+}
+#daily-table thead th[rowspan="2"] {
+    /* rowspan=2 跨越两行的列，固定在第一行（z-index 更高） */
+    z-index: 11;
+    background: #f0f2f5;
+}
+#daily-table tbody td {
+    background: #fff;
+    position: relative;
+    z-index: 1;
+}
+tbody td {
+    padding: 8px 6px;
+    text-align: center;
+    border-bottom: 1px solid #eee;
+    white-space: nowrap;
+}
+tbody tr:hover { background: #f8f9fc; }
+
+/* 红绿标注 */
+.val-negative { background: #fdf0f0; color: #c0392b; font-weight: 600; }
+.val-positive { background: #f0fdf0; color: #1e8449; font-weight: 600; }
+.val-neutral { color: #888; }
+.val-negative-text { color: #c0392b; font-weight: 600; }
+.val-positive-text { color: #1e8449; font-weight: 600; }
+table thead th.th-neg { color: #c0392b; }
+table thead th.th-pos { color: #1e8449; }
+
+/* 7月分天统计表：冻结表头 */
+#monthly-decline-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: #f0f2f5;
+}
+#monthly-decline-table tbody tr:hover td { background: #f5f8fc; }
+
+/* 门店名称可点击链接 */
+.md-store-link {
+    color: #2c3e50;
+    text-decoration: none;
+    cursor: pointer;
+    border-bottom: 1px dashed #aaa;
+}
+.md-store-link:hover {
+    color: #1a5276;
+    border-bottom-color: #1a5276;
+}
+
+/* 门店分天弹窗 */
+.md-store-popup-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.25);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.md-store-popup {
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    max-width: 720px;
+    width: 90%;
+    max-height: 80vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.md-store-popup-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid #e8eaed;
+    font-size: 15px;
+    font-weight: 600;
+    color: #2c3e50;
+}
+.md-store-popup-close {
+    font-size: 20px;
+    color: #999;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 4px;
+}
+.md-store-popup-close:hover { color: #c0392b; }
+.md-store-popup-body {
+    overflow-y: auto;
+    padding: 16px 20px;
+}
+.md-popup-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.md-popup-table thead th {
+    background: #f0f2f5;
+    padding: 8px 10px;
+    text-align: center;
+    font-weight: 600;
+    color: #2c3e50;
+    border-bottom: 2px solid #d8dde5;
+    white-space: nowrap;
+}
+.md-popup-table tbody td {
+    padding: 7px 10px;
+    text-align: center;
+    border-bottom: 1px solid #eef1f5;
+}
+.md-popup-table tbody tr:hover td { background: #f8f9fc; }
+td.val-positive-strong, th.val-positive-strong, .val-positive-strong { color: #1e8449; font-weight: 600; background: #f0fdf0; }
+td.val-negative, th.val-negative, .val-negative { color: #c0392b; font-weight: 600; background: #fdf0f0; }
+
+/* Badge */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+.badge-red { background: #c0392b; color: #fff; }
+.badge-orange { background: #e67e22; color: #fff; }
+.badge-gray { background: #bbb; color: #fff; }
+
+/* 走势打标：4 种组合 */
+.trend-badge {
+    white-space: nowrap;
+    font-size: 11px;
+    line-height: 1.3;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    display: inline-block;
+}
+.trend-up-up   { background: #e6f7ec; color: #1e7e34; border-color: #b5e0c2; }  /* 双涨：绿 */
+.trend-down-down { background: #fde8e8; color: #c0392b; border-color: #f5b7b1; }  /* 双降：红 */
+.trend-up-down { background: #fff5e6; color: #d35400; border-color: #fad7a0; }  /* 同比涨/环比降：橙 */
+.trend-down-up { background: #e8f0fe; color: #1a73e8; border-color: #a8c7fa; }  /* 同比降/环比涨：蓝 */
+.trend-wow-up   { background: #e6f7ec; color: #1e7e34; border-color: #b5e0c2; }  /* 单边环比上涨：绿 */
+.trend-wow-down { background: #fde8e8; color: #c0392b; border-color: #f5b7b1; }  /* 单边环比下滑：红 */
+.trend-flat     { background: #f0f2f5; color: #5f6c7b; border-color: #d5d9e0; }  /* 持平：灰 */
+
+/* ===== 周度汇总表格 ===== */
+.weekly-table { margin-bottom: 24px; }
+
+/* 周度表格冻结列通用样式（仅 weekly-store-table 启用 sticky，其他周度表禁用） */
+.wk-sticky-1 { position: sticky; left: 0; z-index: 5; background: #f0f2f5; font-weight: 600; white-space: nowrap; min-width: 80px; }
+.wk-sticky-2 { position: sticky; left: 80px; z-index: 5; background: #f0f2f5; font-weight: 500; white-space: nowrap; min-width: 100px; }
+.wk-sticky-3 { position: sticky; left: 180px; z-index: 5; background: #f0f2f5; font-weight: 500; white-space: nowrap; min-width: 120px; }
+/* 周度大店长/区经理/总表：不启用 sticky 定位（避免 colspan/rowspan 错位），仅保留背景色 */
+.weekly-sm-table .wk-sticky-1, .weekly-sm-table .wk-sticky-2,
+.weekly-dm-table .wk-sticky-1, .weekly-dm-table .wk-sticky-2,
+.weekly-total-table .wk-sticky-1 {
+    position: static;
+}
+
+/* 每日维度对比表：大店长表冻结 2 列（区经理 + 大店长），区经理表冻结 1 列（区经理） */
+.group-table-sm .wk-sticky-1,
+.group-table-sm .group-table-parent {
+    position: sticky; left: 0; z-index: 5;
+    background: #f0f2f5; font-weight: 600;
+    min-width: 80px;
+}
+.group-table-sm .wk-sticky-2,
+.group-table-sm .group-table-main {
+    position: sticky; left: 80px; z-index: 4;
+    background: #f0f2f5; font-weight: 500;
+    min-width: 100px;
+}
+.group-table-dm .wk-sticky-1,
+.group-table-dm .group-table-main {
+    position: sticky; left: 0; z-index: 5;
+    background: #f0f2f5; font-weight: 600;
+    min-width: 80px;
+}
+.group-table-sm thead .group-table-parent,
+.group-table-dm thead .group-table-main {
+    background: #2c3e50; color: #fff;
+    z-index: 6;
+}
+
+/* 周度大店长/区经理/总表容器：横向滚动 + sticky生效 */
+.weekly-sm-scroll, .weekly-dm-scroll, .weekly-total-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    position: relative;
+}
+
+/* sticky列右侧阴影分隔线（仅在 sticky 滚动容器内启用） */
+#weekly-store-table .wk-sticky-1::after,
+#weekly-store-table .wk-sticky-2::after,
+#weekly-store-table .wk-sticky-3::after {
+    content: '';
+    position: absolute;
+    top: 0; right: -1px; bottom: 0;
+    width: 2px;
+    background: #ddd;
+    z-index: 3;
+}
+.group-table .wk-sticky-1::after,
+.group-table .wk-sticky-2::after {
+    content: '';
+    position: absolute;
+    top: 0; right: -1px; bottom: 0;
+    width: 2px;
+    background: #ddd;
+    z-index: 3;
+}
+
+/* 单店周度对比表：独立滚动容器 + sticky表头 */
+.store-scroll-wrap {
+    max-height: 600px;
+    overflow-y: auto;
+    overflow-x: auto;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    position: relative;
+}
+#weekly-store-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+#weekly-store-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    background: #f0f2f5;
+}
+/* 第二行日期范围副标题 sticky top 38px（与第一行高度一致） */
+#weekly-store-table thead tr:nth-child(2) th {
+    top: 32px;
+}
+/* 第三行 sticky top 70px */
+#weekly-store-table thead tr:nth-child(3) th {
+    top: 64px;
+}
+#weekly-store-table thead th.wk-sticky-1 { z-index: 6; left: 0; }
+#weekly-store-table thead th.wk-sticky-2 { z-index: 6; left: 60px; }
+#weekly-store-table thead th.wk-sticky-3 { z-index: 6; left: 120px; }
+#weekly-store-table tbody td.wk-sticky-1 { z-index: 3; background: #fff; }
+#weekly-store-table tbody td.wk-sticky-2 { z-index: 3; background: #fff; }
+#weekly-store-table tbody td.wk-sticky-3 { z-index: 3; background: #fff; }
+#weekly-store-table tbody tr:hover td.wk-sticky-1 { background: #f8f9fc; }
+#weekly-store-table tbody tr:hover td.wk-sticky-2 { background: #f8f9fc; }
+#weekly-store-table tbody tr:hover td.wk-sticky-3 { background: #f8f9fc; }
+
+/* ===== 异常预警 ===== */
+.alert-list {
+    background: #fff;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.alert-item {
+    padding: 12px 16px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.alert-item:last-child { border-bottom: none; }
+.alert-store { font-weight: 600; min-width: 160px; }
+.alert-info { font-size: 13px; color: #666; }
+.alert-badge { flex-shrink: 0; }
+
+/* ===== 无数据提示 ===== */
+.no-data {
+    text-align: center;
+    padding: 40px;
+    color: #999;
+    font-size: 16px;
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 900px) {
+    .cards-row { grid-template-columns: repeat(2, 1fr); }
+    .filters-bar { flex-direction: column; }
+}
+
+/* ===== 加载动画 ===== */
+.loading-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(255,255,255,0.9);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+}
+.spinner {
+    width: 40px; height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #1a1a2e;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loading">
+    <div class="spinner"></div>
+</div>
+
+<div class="container">
+
+<!-- 固定头部：标题+导航 -->
+<div class="sticky-top" id="sticky-top">
+    <!-- 头部 -->
+    <div class="header">
+        <div>
+            <h1>7月杯数达成看板</h1>
+            <div class="subtitle" id="header-subtitle">墨柠 · 2026年7月</div>
+        </div>
+        <div style="text-align:right; font-size:12px; color:#a0aec0;">
+            <div id="update-time"></div>
+            <div id="selected-date-display" style="font-size:16px; color:#fff; font-weight:600;"></div>
+        </div>
+    </div>
+
+    <!-- Demo提示 -->
+    <div class="demo-banner" id="demo-banner" style="display:none;">
+        <span>⚠️</span>
+        <div>
+            <strong>演示数据模式</strong>
+            <span id="demo-note">当前使用6月数据映射为7月演示数据。添加「2026年7月底稿」Sheet后重新运行脚本即可使用真实数据。</span>
+        </div>
+    </div>
+
+    <!-- 导航标签 -->
+    <div class="nav-tabs">
+        <button class="nav-tab active" onclick="switchModule('daily')">📊 每日看板</button>
+        <button class="nav-tab" onclick="switchModule('alert')">🚨 每日异常门店预警</button>
+        <button class="nav-tab" onclick="switchModule('daily_target')">🎯 日目标达成看板</button>
+        <button class="nav-tab" onclick="switchModule('weekly')">📈 周度达成看板</button>
+    </div>
+</div>
+
+    <!-- ===== 模块一：每日看板 ===== -->
+    <div class="module-section active" id="module-daily">
+        <!-- 筛选栏 -->
+        <div class="filters-bar">
+            <div class="filter-group">
+                <span class="filter-label">选择日期:</span>
+                <select id="sel-date" class="filter-select" onchange="onDateChange()"></select>
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">区经理:</span>
+                <select id="sel-dm" class="filter-select" onchange="onDMChange()">
+                    <option value="">全部</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">大店长:</span>
+                <select id="sel-sm" class="filter-select" onchange="renderDaily()">
+                    <option value="">全部</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- 汇总卡片 -->
+        <div class="cards-row" id="daily-cards"></div>
+
+        <!-- 区经理维度对比表（同期门店） -->
+        <div class="chart-box">
+            <h3>区经理维度对比（同期门店）</h3>
+            <div id="dm-table-container"></div>
+        </div>
+
+        <!-- 大店长维度对比表（同期门店） -->
+        <div class="chart-box">
+            <h3>大店长维度对比（同期门店）</h3>
+            <div id="sm-table-container"></div>
+        </div>
+
+        <!-- 门店明细表 -->
+        <div class="table-box">
+            <h3>门店明细表</h3>
+            <div class="daily-detail-filters" id="daily-detail-filters">
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">区经理 <span class="dd-filter-count" id="dd-count-dm">(全部)</span></span>
+                    <select class="dd-select" id="dd-select-dm" onchange="onDailyDetailSelectChange()"></select>
+                </div>
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">大店长 <span class="dd-filter-count" id="dd-count-sm">(全部)</span></span>
+                    <select class="dd-select" id="dd-select-sm" onchange="onDailyDetailSelectChange()"></select>
+                </div>
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">排序</span>
+                    <select class="dd-select" id="sel-daily-detail-sort" onchange="renderDaily()">
+                        <option value="structure">按架构</option>
+                        <option value="total_yoy_asc">按总杯数同比升序</option>
+                        <option value="total_yoy_desc">按总杯数同比降序</option>
+                        <option value="dine_yoy_asc">按堂食同比升序</option>
+                        <option value="dine_yoy_desc">按堂食同比降序</option>
+                        <option value="deli_yoy_asc">按外卖同比升序</option>
+                        <option value="deli_yoy_desc">按外卖同比降序</option>
+                    </select>
+                </div>
+                <div class="dd-filter-actions">
+                    <button class="dd-action-btn" onclick="clearDailyDetailFilters()">清空筛选</button>
+                </div>
+            </div>
+            <div class="table-scroll-wrap">
+                <table id="daily-table">
+                <thead>
+                    <tr>
+                        <th rowspan="2">区经理</th>
+                        <th rowspan="2">大店长</th>
+                        <th rowspan="2">门店</th>
+                        <th colspan="6">总杯数</th>
+                        <th colspan="6">堂食杯数</th>
+                        <th colspan="6">外卖杯数</th>
+                    </tr>
+                    <tr>
+                        <th>当日</th>
+                        <th>去年</th>
+                        <th>同比%</th>
+                        <th>上周</th>
+                        <th>环比%</th>
+                        <th>总走势</th>
+                        <th>当日</th>
+                        <th>去年</th>
+                        <th>同比%</th>
+                        <th>上周</th>
+                        <th>环比%</th>
+                        <th>堂食走势</th>
+                        <th>当日</th>
+                        <th>去年</th>
+                        <th>同比%</th>
+                        <th>上周</th>
+                        <th>环比%</th>
+                        <th>外卖走势</th>
+                    </tr>
+                </thead>
+                <tbody id="daily-table-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 7月分天下降次数统计表 -->
+        <div class="table-box">
+            <h3>7月分天同比/环比下降次数</h3>
+            <div class="daily-detail-filters" id="monthly-decline-filters">
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">区经理 <span class="dd-filter-count" id="md-count-dm">(全部)</span></span>
+                    <select class="dd-select" id="md-select-dm" onchange="onMonthlyDeclineFilterChange()"></select>
+                </div>
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">大店长 <span class="dd-filter-count" id="md-count-sm">(全部)</span></span>
+                    <select class="dd-select" id="md-select-sm" onchange="onMonthlyDeclineFilterChange()"></select>
+                </div>
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">门店 <span class="dd-filter-count" id="md-count-store">(全部)</span></span>
+                    <div class="dd-combobox" id="md-store-combobox">
+                        <input type="text" class="dd-combobox-input" id="md-store-input" placeholder="搜索门店..." autocomplete="off">
+                        <span class="dd-combobox-caret">&#9660;</span>
+                        <span class="dd-combobox-clear" id="md-store-clear">&times;</span>
+                        <div class="dd-combobox-dropdown" id="md-store-dropdown"></div>
+                    </div>
+                </div>
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">排序</span>
+                    <select class="dd-select" id="md-select-sort" onchange="renderMonthlyDeclineTable()">
+                        <option value="structure">按架构</option>
+                        <option value="yoy_decline_asc">同比下降升序</option>
+                        <option value="yoy_decline_desc">同比下降降序</option>
+                        <option value="yoy_rise_asc">同比上涨升序</option>
+                        <option value="yoy_rise_desc">同比上涨降序</option>
+                        <option value="wow_decline_asc">环比下降升序</option>
+                        <option value="wow_decline_desc">环比下降降序</option>
+                        <option value="wow_rise_asc">环比上涨升序</option>
+                        <option value="wow_rise_desc">环比上涨降序</option>
+                    </select>
+                </div>
+                <div class="dd-filter-actions">
+                    <button class="dd-action-btn" onclick="clearMonthlyDeclineFilters()">清空筛选</button>
+                </div>
+            </div>
+            <div class="table-scroll-wrap" style="max-height: 50vh;">
+                <table id="monthly-decline-table">
+                    <thead>
+                        <tr>
+                            <th>区经理</th>
+                            <th>大店长</th>
+                            <th>门店名称</th>
+                            <th>营业天数</th>
+                            <th class="th-neg">同比下降次数</th>
+                            <th class="th-pos">同比上涨次数</th>
+                            <th class="th-neg">环比下降次数</th>
+                            <th class="th-pos">环比上涨次数</th>
+                        </tr>
+                    </thead>
+                    <tbody id="monthly-decline-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 门店7月分天同比环比弹窗 -->
+    <div class="md-store-popup-overlay" id="md-store-popup" style="display:none;" onclick="mdCloseStorePopup()">
+        <div class="md-store-popup" onclick="event.stopPropagation()">
+            <div class="md-store-popup-header">
+                <span id="md-store-popup-title"></span>
+                <span class="md-store-popup-close" onclick="mdCloseStorePopup()">&times;</span>
+            </div>
+            <div class="md-store-popup-body" id="md-store-popup-body"></div>
+        </div>
+    </div>
+
+    <!-- 门店7月分天目标达成弹窗 -->
+    <div class="md-store-popup-overlay" id="dt-target-popup" style="display:none;" onclick="dtCloseTargetPopup()">
+        <div class="md-store-popup" onclick="event.stopPropagation()">
+            <div class="md-store-popup-header">
+                <span id="dt-target-popup-title"></span>
+                <span class="md-store-popup-close" onclick="dtCloseTargetPopup()">&times;</span>
+            </div>
+            <div class="md-store-popup-body" id="dt-target-popup-body"></div>
+        </div>
+    </div>
+
+    <!-- ===== 模块二：日目标达成看板 ===== -->
+    <div class="module-section" id="module-daily-target">
+        <div class="filters-bar">
+            <div class="filter-group">
+                <span class="filter-label">选择日期:</span>
+                <select id="sel-dt-date" class="filter-select" onchange="renderDailyTarget()">
+                </select>
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">区经理:</span>
+                <select id="sel-dt-dm" class="filter-select" onchange="renderDailyTarget()"></select>
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">大店长:</span>
+                <select id="sel-dt-sm" class="filter-select" onchange="renderDailyTarget()"></select>
+            </div>
+        </div>
+
+        <!-- 5 张汇总卡片 -->
+        <div class="summary-cards" id="dt-summary-cards"></div>
+
+        <!-- 月至今达成 -->
+        <div class="summary-cards" id="dt-monthly-cards"></div>
+
+        <!-- 区经理对比表 -->
+        <div class="table-box">
+            <h3>区经理日目标达成</h3>
+            <div class="filters-bar" style="margin-bottom:10px;">
+                <div class="filter-group">
+                    <span class="filter-label">排序:</span>
+                    <select id="sel-dm-sort" class="filter-select" onchange="dtRenderDMTable(currentDtDate)">
+                        <option value="structure">按架构</option>
+                        <option value="rate_asc">按达成率升序</option>
+                        <option value="rate_desc">按达成率降序</option>
+                        <option value="mrate_asc">按月至今达成率升序</option>
+                        <option value="mrate_desc">按月至今达成率降序</option>
+                    </select>
+                </div>
+            </div>
+            <div class="table-scroll-wrap">
+                <table id="dt-dm-table">
+                    <thead>
+                        <tr>
+                            <th>区经理</th>
+                            <th>目标杯数</th>
+                            <th>实际杯数</th>
+                            <th>达成率</th>
+                            <th class="th-neg">达成率&lt;100%店数</th>
+                            <th class="th-pos">达成率≥100%店数</th>
+                            <th>月至今目标</th>
+                            <th>月至今达成</th>
+                            <th>月至今达成率</th>
+                            <th class="th-neg">月至今&lt;100%店数</th>
+                            <th class="th-pos">月至今≥100%店数</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dt-dm-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 大店长对比表 -->
+        <div class="table-box">
+            <h3>大店长日目标达成</h3>
+            <div class="filters-bar" style="margin-bottom:10px;">
+                <div class="filter-group">
+                    <span class="filter-label">排序:</span>
+                    <select id="sel-sm-sort" class="filter-select" onchange="dtRenderSMTable(currentDtDate)">
+                        <option value="structure">按架构</option>
+                        <option value="rate_asc">按达成率升序</option>
+                        <option value="rate_desc">按达成率降序</option>
+                        <option value="mrate_asc">按月至今达成率升序</option>
+                        <option value="mrate_desc">按月至今达成率降序</option>
+                    </select>
+                </div>
+            </div>
+            <div class="table-scroll-wrap" style="max-height: 50vh;">
+                <table id="dt-sm-table">
+                    <thead>
+                        <tr>
+                            <th>区经理</th>
+                            <th>大店长</th>
+                            <th>目标杯数</th>
+                            <th>实际杯数</th>
+                            <th>达成率</th>
+                            <th class="th-neg">达成率&lt;100%店数</th>
+                            <th class="th-pos">达成率≥100%店数</th>
+                            <th>月至今目标</th>
+                            <th>月至今达成</th>
+                            <th>月至今达成率</th>
+                            <th class="th-neg">月至今&lt;100%店数</th>
+                            <th class="th-pos">月至今≥100%店数</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dt-sm-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 单店达成率表 -->
+        <div class="table-box">
+            <h3>单店日目标达成</h3>
+            <div class="filters-bar" style="margin-bottom:10px;">
+                <div class="filter-group">
+                    <span class="filter-label">区经理:</span>
+                    <select id="sel-store-dm" class="filter-select" onchange="onStoreFilterChange()"></select>
+                </div>
+                <div class="filter-group">
+                    <span class="filter-label">大店长:</span>
+                    <select id="sel-store-sm" class="filter-select" onchange="onStoreFilterChange()"></select>
+                </div>
+                <div class="filter-group">
+                    <span class="filter-label">排序:</span>
+                    <select id="sel-store-sort" class="filter-select" onchange="onStoreFilterChange()">
+                        <option value="structure">按架构</option>
+                        <option value="rate_asc">达成率升序</option>
+                        <option value="rate_desc">达成率降序</option>
+                        <option value="mrate_asc">月至今达成升序</option>
+                        <option value="mrate_desc">月至今达成降序</option>
+                    </select>
+                </div>
+            </div>
+            <div class="table-scroll-wrap" style="max-height: 70vh;">
+                <table id="dt-store-table">
+                    <thead>
+                        <tr>
+                            <th>区经理</th>
+                            <th>大店长</th>
+                            <th>门店</th>
+                            <th>目标杯数</th>
+                            <th>实际杯数</th>
+                            <th>达成率</th>
+                            <th>月至今目标</th>
+                            <th>月至今达成</th>
+                            <th>月至今达成率</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dt-store-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== 模块三：周度汇总 ===== -->
+    <div class="module-section" id="module-weekly">
+        <div class="filters-bar">
+            <div class="filter-group">
+                <span class="filter-label">统计周:</span>
+                <select id="sel-week-weekly" class="filter-select" onchange="renderWeekly()">
+                </select>
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">区经理:</span>
+                <select id="sel-dm-weekly" class="filter-select" onchange="renderWeekly()">
+                    <option value="">全部</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- 周度总表 -->
+        <div class="table-box weekly-table">
+            <h3>周度总表</h3>
+            <div class="weekly-total-scroll">
+                <table id="weekly-total-table" class="weekly-total-table">
+                    <thead id="weekly-total-head"></thead>
+                    <tbody id="weekly-total-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 区经理周度对比表 -->
+        <div class="table-box weekly-table">
+            <h3>区经理周度对比表</h3>
+            <div class="weekly-dm-scroll">
+                <table id="weekly-dm-table" class="weekly-dm-table">
+                    <thead id="weekly-dm-head"></thead>
+                    <tbody id="weekly-dm-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 大店长周度对比表 -->
+        <div class="table-box weekly-table">
+            <h3>大店长周度对比表</h3>
+            <div class="weekly-sm-scroll">
+                <table id="weekly-sm-table" class="weekly-sm-table">
+                    <thead id="weekly-sm-head"></thead>
+                    <tbody id="weekly-sm-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 单店周度对比表 -->
+        <div class="table-box weekly-table">
+            <h3>单店周度对比表</h3>
+            <div class="daily-detail-filters" id="weekly-store-filters">
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">区经理 <span class="dd-filter-count" id="ws-count-dm">(全部)</span></span>
+                    <select class="dd-select" id="ws-select-dm" onchange="onWeeklyStoreSelectChange()"></select>
+                </div>
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">大店长 <span class="dd-filter-count" id="ws-count-sm">(全部)</span></span>
+                    <select class="dd-select" id="ws-select-sm" onchange="onWeeklyStoreSelectChange()"></select>
+                </div>
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">门店 <span class="dd-filter-count" id="ws-count-store">(全部)</span></span>
+                    <div class="dd-combobox" id="ws-store-combobox">
+                        <input type="text" class="dd-combobox-input" id="ws-store-input" placeholder="点击或输入搜索门店" autocomplete="off" onclick="wsOpenStoreDropdown()" oninput="wsOnStoreInput()" />
+                        <button class="dd-combobox-clear" id="ws-store-clear" onclick="event.stopPropagation();wsClearStore()">×</button>
+                        <div class="dd-combobox-dropdown" id="ws-store-dropdown"></div>
+                    </div>
+                </div>
+                <div class="dd-filter-group">
+                    <span class="dd-filter-label">排序</span>
+                    <select class="dd-select" id="sel-ws-sort" onchange="renderWeekly()">
+                        <option value="structure">按架构</option>
+                        <option value="total_yoy_desc">总杯数同比降序</option>
+                        <option value="total_yoy_asc">总杯数同比升序</option>
+                    </select>
+                </div>
+                <div class="dd-filter-actions">
+                    <button class="dd-action-btn" onclick="clearWeeklyStoreFilters()">清空筛选</button>
+                </div>
+            </div>
+            <div class="store-scroll-wrap">
+                <table id="weekly-store-table">
+                    <thead id="weekly-store-head"></thead>
+                    <tbody id="weekly-store-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== 模块三：每日异常门店预警 ===== -->
+    <div class="module-section" id="module-alert">
+        <div class="filters-bar">
+            <div class="filter-group">
+                <span class="filter-label">选择日期:</span>
+                <select id="sel-date-alert" class="filter-select" onchange="renderAlert()"></select>
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">区经理:</span>
+                <select id="sel-dm-alert" class="filter-select" onchange="renderAlert()">
+                    <option value="">全部</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- 异常汇总卡片 -->
+        <div class="cards-row" id="alert-cards"></div>
+
+        <!-- 异常门店列表 -->
+        <div class="alert-list" id="alert-list"></div>
+    </div>
+</div>
+
+<script>
+// ===== 数据 =====
+const DATA = __DATA_PLACEHOLDER__;
+
+// ===== 全局状态 =====
+let smList = [];
+let currentDate = "";
+let currentModule = "daily";
+// 门店明细表筛选当前单选值（空字符串 = 全部）
+const ddSelected = { dm: "", sm: "" };
+// 7月分天下降次数统计表筛选状态
+const mdSelected = { dm: "", sm: "", store: "" };
+// 单店周度对比表筛选状态
+const wsSelected = { dm: "", sm: "", store: "" };
+let wsStoreList = []; // 单店周度对比表：当前级联后的门店列表
+
+// ===== 初始化 =====
+function init() {
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("update-time").textContent = "更新时间: " + DATA.meta.generated_at;
+
+    // Demo mode banner
+    if (DATA.meta.demo_mode) {
+        document.getElementById("demo-banner").style.display = "flex";
+        document.getElementById("demo-note").textContent = DATA.meta.demo_note || "";
+    }
+
+    // 填充日期选择器
+    populateDateSelects();
+    populateDMSelects();
+
+    // 设置默认日期（最近有数据的日期）
+    const dates = DATA.available_dates_current;
+    if (dates.length > 0) {
+        currentDate = dates[dates.length - 1];
+        document.getElementById("sel-date").value = currentDate;
+        document.getElementById("sel-date-alert").value = currentDate;
+    } else {
+        currentDate = "";
+    }
+
+    // 绑定门店 combobox 事件
+    bindMdStoreCombobox();
+    bindWsStoreCombobox();
+
+    renderDaily();
+}
+
+function populateDateSelects() {
+    const selDate = document.getElementById("sel-date");
+    const selDateAlert = document.getElementById("sel-date-alert");
+    const dates = DATA.available_dates_current;
+
+    // 日期列表
+    selDate.innerHTML = "";
+    selDateAlert.innerHTML = "";
+
+    if (dates.length === 0) {
+        selDate.innerHTML = '<option value="">暂无数据</option>';
+        selDateAlert.innerHTML = '<option value="">暂无数据</option>';
+        return;
+    }
+
+    for (const d of dates) {
+        const mapping = DATA.date_mapping[d];
+        const label = mapping ? `${d} (${mapping.weekday})` : d;
+        const opt = `<option value="${d}">${label}</option>`;
+        selDate.innerHTML += opt;
+        selDateAlert.innerHTML += opt;
+    }
+
+    // 同步标记有对比数据的日期
+    for (const d of dates) {
+        const mapping = DATA.date_mapping[d];
+        if (mapping) {
+            const yoyHas = DATA.yoy_data[mapping.yoy_date] ? true : false;
+            const wowHas = DATA.wow_data[mapping.wow_date] ? true : false;
+            const opt = selDate.querySelector(`option[value="${d}"]`);
+            if (opt) {
+                const suffix = yoyHas && wowHas ? " ✅" : " ⏳";
+                opt.textContent += suffix;
+            }
+        }
+    }
+}
+
+function populateDMSelects() {
+    const dmList = DATA.dm_list;
+    const selects = ["sel-dm", "sel-dm-weekly", "sel-dm-alert"];
+    for (const id of selects) {
+        const sel = document.getElementById(id);
+        sel.innerHTML = '<option value="">全部</option>';
+        for (const dm of dmList) {
+            sel.innerHTML += `<option value="${dm}">${dm}</option>`;
+        }
+    }
+    // 初始填充大店长下拉（展示全部大店长；用户选择区经理后由 onDMChange 二次过滤）
+    const selSM = document.getElementById("sel-sm");
+    selSM.innerHTML = '<option value="">全部</option>';
+    const allSMs = [];
+    for (const dm of dmList) {
+        const sms = (DATA.sm_by_dm && DATA.sm_by_dm[dm]) || [];
+        for (const sm of sms) if (allSMs.indexOf(sm) === -1) allSMs.push(sm);
+    }
+    // 按 DATA.sm_list 顺序
+    const orderedSMs = (DATA.sm_list || []).filter(s => allSMs.indexOf(s) !== -1);
+    for (const sm of orderedSMs) {
+        selSM.innerHTML += `<option value="${sm}">${sm}</option>`;
+    }
+
+
+    // 填充日目标看板筛选（日期 / 区经理 / 大店长 / 门店）
+    populateDailyTargetFilters();
+}
+
+function populateDailyTargetFilters() {
+    // 日期：仅展示 7 月有日目标的日期，默认选有实际数据的最近一天
+    const selDate = document.getElementById("sel-dt-date");
+    if (selDate) {
+        const targetDates = Object.keys(DATA.daily_target || {}).sort();
+        const actualDates = (DATA.available_dates_current || []).filter(d => targetDates.includes(d));
+        selDate.innerHTML = "";
+        if (targetDates.length === 0) {
+            selDate.innerHTML = '<option value="">暂无日目标数据</option>';
+        } else {
+            for (const d of targetDates) {
+                const wd = DATA.date_mapping[d] ? DATA.date_mapping[d].weekday : "";
+                selDate.innerHTML += `<option value="${d}">${d} (${wd})</option>`;
+            }
+            // 默认：有实际数据的最近一天；若无则取目标日期最后一天
+            currentDtDate = actualDates.length > 0
+                ? actualDates[actualDates.length - 1]
+                : targetDates[targetDates.length - 1];
+            selDate.value = currentDtDate;
+        }
+    }
+    // 区经理
+    const selDM = document.getElementById("sel-dt-dm");
+    if (selDM) {
+        selDM.innerHTML = '<option value="">全部</option>';
+        for (const dm of DATA.dm_list || []) {
+            selDM.innerHTML += `<option value="${dm}">${dm}</option>`;
+        }
+    }
+    // 大店长
+    const selSM = document.getElementById("sel-dt-sm");
+    if (selSM) {
+        selSM.innerHTML = '<option value="">全部</option>';
+        for (const sm of DATA.sm_list || []) {
+            selSM.innerHTML += `<option value="${sm}">${sm}</option>`;
+        }
+    }
+    // 门店
+    const selStore = document.getElementById("sel-dt-store");
+    if (selStore) {
+        selStore.innerHTML = '<option value="">全部</option>';
+        for (const code in DATA.store_info) {
+            const name = DATA.store_info[code].store_name || code;
+            selStore.innerHTML += `<option value="${code}">${name}</option>`;
+        }
+    }
+    // 单店表独立筛选：区经理
+    const selStoreDM = document.getElementById("sel-store-dm");
+    if (selStoreDM) {
+        const prev = selStoreDM.value;
+        selStoreDM.innerHTML = '<option value="">全部</option>';
+        for (const dm of DATA.dm_list || []) {
+            selStoreDM.innerHTML += `<option value="${dm}">${dm}</option>`;
+        }
+        if (prev) selStoreDM.value = prev;
+    }
+    // 单店表独立筛选：大店长（联动区经理）
+    const selStoreSM = document.getElementById("sel-store-sm");
+    if (selStoreSM) {
+        const prev = selStoreSM.value;
+        const dmVal = selStoreDM ? selStoreDM.value : "";
+        selStoreSM.innerHTML = '<option value="">全部</option>';
+        const smSet = new Set();
+        for (const code in DATA.store_info) {
+            const info = DATA.store_info[code];
+            if (dmVal && info.dm !== dmVal) continue;
+            if (info.sm) smSet.add(info.sm);
+        }
+        for (const sm of Array.from(smSet).sort((a, b) => a.localeCompare(b, "zh"))) {
+            selStoreSM.innerHTML += `<option value="${sm}">${sm}</option>`;
+        }
+        if (prev && smSet.has(prev)) selStoreSM.value = prev;
+    }
+    // 单店表独立筛选：门店（联动区经理+大店长）- 可搜索combobox
+    const dmVal = selStoreDM ? selStoreDM.value : "";
+    const smVal = selStoreSM ? selStoreSM.value : "";
+    storeComboData = [{ code: "", name: "全部" }];
+    for (const code in DATA.store_info) {
+        const info = DATA.store_info[code];
+        if (dmVal && info.dm !== dmVal) continue;
+        if (smVal && info.sm !== smVal) continue;
+        storeComboData.push({ code, name: info.store_name || code });
+    }
+    // 检查当前选中值是否仍然有效
+    const selStoreStore = document.getElementById("sel-store-store");
+    if (selStoreStore) {
+        const prev = selStoreStore.value;
+        if (prev && !storeComboData.find(s => s.code === prev)) {
+            selStoreStore.value = "";
+            storeComboSelected = { code: "", name: "" };
+            const inputEl = document.getElementById("sel-store-store-input");
+            if (inputEl) inputEl.value = "";
+        }
+    }
+}
+
+function onStoreFilterChange() {
+    // 重新填充联动下拉（不重置用户已选择的日期）
+    const prevDate = document.getElementById("sel-dt-date").value;
+    populateDailyTargetFilters();
+    if (prevDate) {
+        const sel = document.getElementById("sel-dt-date");
+        const opt = sel.querySelector(`option[value="${prevDate}"]`);
+        if (opt) {
+            sel.value = prevDate;
+            currentDtDate = prevDate;
+        }
+    }
+    if (currentDtDate) dtRenderStoreTable(currentDtDate);
+}
+
+// ---- 门店可搜索combobox ----
+let storeComboData = [];
+let storeComboSelected = { code: "", name: "" };
+
+function initStoreCombo() {
+    const input = document.getElementById("sel-store-store-input");
+    const dropdown = document.getElementById("sel-store-store-dropdown");
+    if (!input || !dropdown) return;
+    input.addEventListener("focus", function() {
+        renderStoreComboOptions("");
+        dropdown.classList.add("show");
+        input.select();
+    });
+    input.addEventListener("input", function() {
+        renderStoreComboOptions(input.value);
+        if (!dropdown.classList.contains("show")) dropdown.classList.add("show");
+    });
+    input.addEventListener("blur", function() {
+        setTimeout(function() {
+            dropdown.classList.remove("show");
+            input.value = storeComboSelected.code ? storeComboSelected.name : "";
+        }, 200);
+    });
+    dropdown.addEventListener("click", function(e) {
+        const opt = e.target.closest(".combo-option");
+        if (!opt || opt.classList.contains("no-match")) return;
+        const code = opt.dataset.code;
+        const name = opt.textContent;
+        storeComboSelected = { code, name };
+        document.getElementById("sel-store-store").value = code;
+        input.value = code ? name : "";
+        dropdown.classList.remove("show");
+        if (currentDtDate) dtRenderStoreTable(currentDtDate);
+    });
+    // 键盘导航
+    input.addEventListener("keydown", function(e) {
+        const opts = dropdown.querySelectorAll(".combo-option:not(.no-match)");
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            if (!dropdown.classList.contains("show")) { dropdown.classList.add("show"); return; }
+            let idx = Array.from(opts).findIndex(o => o.classList.contains("active"));
+            if (idx >= 0) opts[idx].classList.remove("active");
+            idx = Math.min(idx + 1, opts.length - 1);
+            if (idx < 0) idx = 0;
+            if (opts[idx]) { opts[idx].classList.add("active"); opts[idx].scrollIntoView({ block: "nearest" }); }
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            let idx = Array.from(opts).findIndex(o => o.classList.contains("active"));
+            if (idx >= 0) opts[idx].classList.remove("active");
+            idx = Math.max(idx - 1, 0);
+            if (opts[idx]) { opts[idx].classList.add("active"); opts[idx].scrollIntoView({ block: "nearest" }); }
+        } else if (e.key === "Enter") {
+            e.preventDefault();
+            const active = dropdown.querySelector(".combo-option.active");
+            if (active) { active.click(); }
+            else if (opts.length === 1) { opts[0].click(); }
+        } else if (e.key === "Escape") {
+            dropdown.classList.remove("show");
+            input.value = storeComboSelected.code ? storeComboSelected.name : "";
+        }
+    });
+}
+
+function renderStoreComboOptions(query) {
+    const dropdown = document.getElementById("sel-store-store-dropdown");
+    if (!dropdown) return;
+    let items = storeComboData;
+    if (query) {
+        const q = query.toLowerCase();
+        items = storeComboData.filter(s => s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q));
+    }
+    if (items.length === 0) {
+        dropdown.innerHTML = '<div class="combo-option no-match">无匹配门店</div>';
+        return;
+    }
+    dropdown.innerHTML = items.map(s =>
+        '<div class="combo-option" data-code="' + s.code + '">' + s.name + '</div>'
+    ).join("");
+}
+
+let currentDtDate = "";
+let currentDtDM = "";
+let currentDtSM = "";
+let currentDtStore = "";
+
+function dtGetFilteredCodes() {
+    const codes = [];
+    for (const code in DATA.store_info) {
+        const info = DATA.store_info[code];
+        if (currentDtDM && info.dm !== currentDtDM) continue;
+        if (currentDtSM && info.sm !== currentDtSM) continue;
+        if (currentDtStore && code !== currentDtStore) continue;
+        codes.push(code);
+    }
+    return codes;
+}
+
+function dtGetActualData(dateStr, codes) {
+    const day = (DATA.current_data || {})[dateStr] || {};
+    const out = {};
+    for (const code of codes) {
+        const r = day[code] || {};
+        out[code] = { total: r.total || 0, dine_in: r.dine_in || 0, delivery: r.delivery || 0 };
+    }
+    return out;
+}
+
+function dtGetTargetData(dateStr, codes) {
+    const day = (DATA.daily_target || {})[dateStr] || {};
+    const out = {};
+    for (const code of codes) {
+        out[code] = { total: day[code] || 0 };
+    }
+    return out;
+}
+
+// 取指定日期的同比（去年同日）数据，返回 { code: { total, dine_in, delivery } }
+function dtGetYoyData(dateStr, codes) {
+    const mapping = (DATA.date_mapping || {})[dateStr] || {};
+    const yoyDate = mapping.yoy_date;
+    const day = yoyDate ? ((DATA.yoy_data || {})[yoyDate] || {}) : {};
+    const out = {};
+    for (const code of codes) {
+        const r = day[code] || {};
+        out[code] = { total: r.total || 0, dine_in: r.dine_in || 0, delivery: r.delivery || 0 };
+    }
+    return out;
+}
+
+function dtRate(num, denom) {
+    if (!denom || denom <= 0) return null;
+    return num / denom;
+}
+
+function dtRateClass(rate) {
+    if (rate === null) return "val-neutral";
+    if (rate >= 1.0) return "val-positive-strong";
+    if (rate >= 0.9) return "val-neutral";
+    return "val-negative";
+}
+
+function dtRenderSummaryCards(dateStr) {
+    const codes = dtGetFilteredCodes();
+    const targets = dtGetTargetData(dateStr, codes);
+    const actuals = dtGetActualData(dateStr, codes);
+    let tTotal = 0, aTotal = 0, belowCount = 0, reachCount = 0, openCount = 0;
+    for (const code of codes) {
+        const t = (targets[code] && targets[code].total) || 0;
+        const a = (actuals[code] && actuals[code].total) || 0;
+        tTotal += t;
+        aTotal += a;
+        if (a > 0) {
+            openCount++;
+            if (t > 0) {
+                if (a >= t) reachCount++;
+                else belowCount++;
+            }
+        }
+    }
+    const rate = tTotal > 0 ? aTotal / tTotal : 0;
+    const fmt = n => (n || 0).toLocaleString();
+    const pct = r => (r * 100).toFixed(1) + "%";
+    const subPct = (n, d) => d > 0 ? ((n / d) * 100).toFixed(1) + "%" : "-";
+    const cards = [
+        { label: "日目标杯数", value: fmt(tTotal), cls: "card-blue" },
+        { label: "日实际杯数", value: fmt(aTotal), cls: "card-green" },
+        { label: "达成率", value: pct(rate), cls: rate === null ? "val-neutral" : (rate >= 1 ? "val-positive-strong" : (rate >= 0.9 ? "val-neutral" : "val-negative")) },
+        { label: "达成率<100%店数", value: fmt(belowCount), cls: "val-negative", sub: `占比 ${subPct(belowCount, openCount)}` },
+        { label: "达成率≥100%店数", value: fmt(reachCount), cls: "val-positive-strong", sub: `占比 ${subPct(reachCount, openCount)}` },
+    ];
+    document.getElementById("dt-summary-cards").innerHTML = cards.map(c =>
+        `<div class="summary-card ${c.cls}">
+            <div class="summary-label">${c.label}</div>
+            <div class="summary-value">${c.value}</div>
+            ${c.sub ? `<div class="summary-sub">${c.sub}</div>` : ""}
+        </div>`
+    ).join("");
+}
+
+function dtGetMonthlyData(dateStr, codes) {
+    const monthPrefix = dateStr.substring(0, 7);
+    const mDates = Object.keys(DATA.current_data || {}).filter(d => d.startsWith(monthPrefix)).sort();
+    const out = {};
+    for (const code of codes) {
+        out[code] = { target: 0, actual: 0 };
+    }
+    for (const d of mDates) {
+        const dayActual = DATA.current_data[d] || {};
+        const dayTarget = (DATA.daily_target || {})[d] || {};
+        for (const code of codes) {
+            out[code].actual += (dayActual[code] && dayActual[code].total) || 0;
+            out[code].target += dayTarget[code] || 0;
+        }
+    }
+    return { data: out, dates: mDates };
+}
+
+function dtRenderMonthlyCards(dateStr) {
+    const codes = dtGetFilteredCodes();
+    const { data: monthly, dates: mDates } = dtGetMonthlyData(dateStr, codes);
+    // 月累计营业店数：当月任一天 a>0 的门店数
+    const openSet = new Set();
+    for (const d of mDates) {
+        const dayActual = DATA.current_data[d] || {};
+        for (const code of codes) {
+            const a = (dayActual[code] && dayActual[code].total) || 0;
+            if (a > 0) openSet.add(code);
+        }
+    }
+    const openCount = openSet.size;
+    let mTarget = 0, mActual = 0, belowCount = 0, reachCount = 0;
+    for (const code of codes) {
+        const t = (monthly[code] && monthly[code].target) || 0;
+        const a = (monthly[code] && monthly[code].actual) || 0;
+        mTarget += t;
+        mActual += a;
+        if (t > 0 && a > 0) {
+            if (a >= t) reachCount++;
+            else belowCount++;
+        }
+    }
+    const rate = dtRate(mActual, mTarget);
+    const fmt = n => (n || 0).toLocaleString();
+    const pct = r => r === null ? "-" : (r * 100).toFixed(1) + "%";
+    const subPct = (n, d) => d > 0 ? ((n / d) * 100).toFixed(1) + "%" : "-";
+    const fmtMD = s => { const [_, m, dd] = s.split("-"); return parseInt(m) + "/" + parseInt(dd); };
+    const rangeText = mDates.length > 0 ? `${fmtMD(mDates[0])} ~ ${fmtMD(mDates[mDates.length - 1])}，共${mDates.length}天` : "";
+    const cards = [
+        { label: `月至今目标 <span style="font-size:12px;font-weight:400;color:#888;margin-left:4px;">（${rangeText}）</span>`, value: fmt(mTarget), cls: "card-blue" },
+        { label: "月至今达成", value: fmt(mActual), cls: "card-green" },
+        { label: "月至今达成率", value: pct(rate), cls: rate === null ? "val-neutral" : (rate >= 1 ? "val-positive-strong" : (rate >= 0.9 ? "val-neutral" : "val-negative")) },
+        { label: "达成率<100%店数", value: fmt(belowCount), cls: "val-negative", sub: `占比 ${subPct(belowCount, openCount)}` },
+        { label: "达成率≥100%店数", value: fmt(reachCount), cls: "val-positive-strong", sub: `占比 ${subPct(reachCount, openCount)}` },
+    ];
+    document.getElementById("dt-monthly-cards").innerHTML = cards.map(c =>
+        `<div class="summary-card ${c.cls}">
+            <div class="summary-label">${c.label}</div>
+            <div class="summary-value">${c.value}</div>
+            ${c.sub ? `<div class="summary-sub">${c.sub}</div>` : ""}
+        </div>`
+    ).join("");
+}
+
+function dtRenderDMTable(dateStr) {
+    const codes = dtGetFilteredCodes();
+    const targets = dtGetTargetData(dateStr, codes);
+    const actuals = dtGetActualData(dateStr, codes);
+    const monthly = dtGetMonthlyData(dateStr, codes).data;
+    const byDm = {};
+    for (const code of codes) {
+        const dm = (DATA.store_info[code] && DATA.store_info[code].dm) || "未分组";
+        if (!byDm[dm]) byDm[dm] = { t: 0, a: 0, mt: 0, ma: 0, below: 0, reach: 0, open: 0, mBelow: 0, mReach: 0, mOpen: 0 };
+        const t = (targets[code] && targets[code].total) || 0;
+        const a = (actuals[code] && actuals[code].total) || 0;
+        const mt = (monthly[code] && monthly[code].target) || 0;
+        const ma = (monthly[code] && monthly[code].actual) || 0;
+        byDm[dm].t += t;
+        byDm[dm].a += a;
+        byDm[dm].mt += mt;
+        byDm[dm].ma += ma;
+        if (a > 0) {
+            byDm[dm].open++;
+            if (t > 0) {
+                if (a >= t) byDm[dm].reach++;
+                else byDm[dm].below++;
+            }
+        }
+        if (ma > 0) {
+            byDm[dm].mOpen++;
+            if (mt > 0) {
+                if (ma >= mt) byDm[dm].mReach++;
+                else byDm[dm].mBelow++;
+            }
+        }
+    }
+    const dms = (DATA.dm_list || []).filter(d => byDm[d]);
+    const sortKey = (document.getElementById("sel-dm-sort") || {}).value || "structure";
+    const dmArr = dms.map(dm => {
+        const x = byDm[dm];
+        const r = dtRate(x.a, x.t);
+        const mr = dtRate(x.ma, x.mt);
+        return { dm, x, r, mr };
+    });
+    if (sortKey === "rate_asc") {
+        dmArr.sort((a, b) => (a.r ?? -1) - (b.r ?? -1));
+    } else if (sortKey === "rate_desc") {
+        dmArr.sort((a, b) => (b.r ?? -1) - (a.r ?? -1));
+    } else if (sortKey === "mrate_asc") {
+        dmArr.sort((a, b) => (a.mr ?? -1) - (b.mr ?? -1));
+    } else if (sortKey === "mrate_desc") {
+        dmArr.sort((a, b) => (b.mr ?? -1) - (a.mr ?? -1));
+    } else {
+        // 按架构：dm_list 原始顺序
+    }
+    // 追加「墨柠累计」汇总行（所有门店合计，始终在最后一行）
+    const totalX = { t: 0, a: 0, mt: 0, ma: 0, below: 0, reach: 0, open: 0, mBelow: 0, mReach: 0, mOpen: 0 };
+    for (const dm in byDm) {
+        const x = byDm[dm];
+        for (const k in totalX) totalX[k] += x[k];
+    }
+    dmArr.push({ dm: "墨柠累计", x: totalX, r: dtRate(totalX.a, totalX.t), mr: dtRate(totalX.ma, totalX.mt) });
+    const fmt = n => (n || 0).toLocaleString();
+    const pct = r => r === null ? "-" : (r * 100).toFixed(1) + "%";
+    const subPct = (n, d) => d > 0 ? ((n / d) * 100).toFixed(1) + "%" : "-";
+    const rows = dmArr.map(({ dm, x, r, mr }) => {
+        const isTotal = dm === "墨柠累计";
+        const trStyle = isTotal ? ' style="font-weight:700;background:#f0f2f5;"' : '';
+        return `<tr${trStyle}>
+            <td>${dm}</td>
+            <td>${fmt(x.t)}</td>
+            <td>${fmt(x.a)}</td>
+            <td class="${dtRateClass(r)}">${pct(r)}</td>
+            <td>${fmt(x.below)}<span style="font-size:11px;color:#999;margin-left:4px;">(${subPct(x.below, x.open)})</span></td>
+            <td>${fmt(x.reach)}<span style="font-size:11px;color:#999;margin-left:4px;">(${subPct(x.reach, x.open)})</span></td>
+            <td>${fmt(x.mt)}</td>
+            <td>${fmt(x.ma)}</td>
+            <td class="${dtRateClass(mr)}">${pct(mr)}</td>
+            <td>${fmt(x.mBelow)}<span style="font-size:11px;color:#999;margin-left:4px;">(${subPct(x.mBelow, x.mOpen)})</span></td>
+            <td>${fmt(x.mReach)}<span style="font-size:11px;color:#999;margin-left:4px;">(${subPct(x.mReach, x.mOpen)})</span></td>
+        </tr>`;
+    }).join("");
+    document.getElementById("dt-dm-body").innerHTML = rows || '<tr><td colspan="11" style="text-align:center;color:#999;padding:20px;">暂无数据</td></tr>';
+}
+
+function dtRenderSMTable(dateStr) {
+    const codes = dtGetFilteredCodes();
+    const targets = dtGetTargetData(dateStr, codes);
+    const actuals = dtGetActualData(dateStr, codes);
+    const monthly = dtGetMonthlyData(dateStr, codes).data;
+    const bySM = {};
+    for (const code of codes) {
+        const info = DATA.store_info[code] || {};
+        const dm = info.dm || "未分组";
+        const sm = info.sm || "未分组";
+        const key = dm + "||" + sm;
+        if (!bySM[key]) bySM[key] = { dm, sm, t: 0, a: 0, mt: 0, ma: 0, below: 0, reach: 0, open: 0, mBelow: 0, mReach: 0, mOpen: 0 };
+        const t = (targets[code] && targets[code].total) || 0;
+        const a = (actuals[code] && actuals[code].total) || 0;
+        const mt = (monthly[code] && monthly[code].target) || 0;
+        const ma = (monthly[code] && monthly[code].actual) || 0;
+        bySM[key].t += t;
+        bySM[key].a += a;
+        bySM[key].mt += mt;
+        bySM[key].ma += ma;
+        if (a > 0) {
+            bySM[key].open++;
+            if (t > 0) {
+                if (a >= t) bySM[key].reach++;
+                else bySM[key].below++;
+            }
+        }
+        if (ma > 0) {
+            bySM[key].mOpen++;
+            if (mt > 0) {
+                if (ma >= mt) bySM[key].mReach++;
+                else bySM[key].mBelow++;
+            }
+        }
+    }
+    const arr = Object.values(bySM).filter(x => x.t > 0);
+    const sortKey = (document.getElementById("sel-sm-sort") || {}).value || "structure";
+    if (sortKey === "rate_asc") {
+        arr.sort((a, b) => (dtRate(a.a, a.t) ?? -1) - (dtRate(b.a, b.t) ?? -1));
+    } else if (sortKey === "rate_desc") {
+        arr.sort((a, b) => (dtRate(b.a, b.t) ?? -1) - (dtRate(a.a, a.t) ?? -1));
+    } else if (sortKey === "mrate_asc") {
+        arr.sort((a, b) => (dtRate(a.ma, a.mt) ?? -1) - (dtRate(b.ma, b.mt) ?? -1));
+    } else if (sortKey === "mrate_desc") {
+        arr.sort((a, b) => (dtRate(b.ma, b.mt) ?? -1) - (dtRate(a.ma, a.mt) ?? -1));
+    } else {
+        // 按架构：先按区经理(dm)升序，再按大店长(sm)升序
+        arr.sort((a, b) => (a.dm + a.sm).localeCompare(b.dm + b.sm, "zh"));
+    }
+    const fmt = n => (n || 0).toLocaleString();
+    const pct = r => r === null ? "-" : (r * 100).toFixed(1) + "%";
+    const subPct = (n, d) => d > 0 ? ((n / d) * 100).toFixed(1) + "%" : "-";
+    const rows = arr.map(x => {
+        const r = dtRate(x.a, x.t);
+        const mr = dtRate(x.ma, x.mt);
+        return `<tr>
+            <td>${x.dm}</td>
+            <td>${x.sm}</td>
+            <td>${fmt(x.t)}</td>
+            <td>${fmt(x.a)}</td>
+            <td class="${dtRateClass(r)}">${pct(r)}</td>
+            <td>${fmt(x.below)}<span style="font-size:11px;color:#999;margin-left:4px;">(${subPct(x.below, x.open)})</span></td>
+            <td>${fmt(x.reach)}<span style="font-size:11px;color:#999;margin-left:4px;">(${subPct(x.reach, x.open)})</span></td>
+            <td>${fmt(x.mt)}</td>
+            <td>${fmt(x.ma)}</td>
+            <td class="${dtRateClass(mr)}">${pct(mr)}</td>
+            <td>${fmt(x.mBelow)}<span style="font-size:11px;color:#999;margin-left:4px;">(${subPct(x.mBelow, x.mOpen)})</span></td>
+            <td>${fmt(x.mReach)}<span style="font-size:11px;color:#999;margin-left:4px;">(${subPct(x.mReach, x.mOpen)})</span></td>
+        </tr>`;
+    }).join("");
+    document.getElementById("dt-sm-body").innerHTML = rows || '<tr><td colspan="12" style="text-align:center;color:#999;padding:20px;">暂无数据</td></tr>';
+}
+
+function dtRenderStoreTable(dateStr) {
+    const allCodes = Object.keys(DATA.store_info || {});
+    const targets = dtGetTargetData(dateStr, allCodes);
+    const actuals = dtGetActualData(dateStr, allCodes);
+    const monthly = dtGetMonthlyData(dateStr, allCodes).data;
+    const yoy = dtGetYoyData(dateStr, allCodes);
+    // 优先使用单店表独立筛选（sel-store-dm/sm/store），未选择时回退到全局筛选
+    const localDM = (document.getElementById("sel-store-dm") || {}).value;
+    const localSM = (document.getElementById("sel-store-sm") || {}).value;
+    const localStore = (document.getElementById("sel-store-store") || {}).value;
+    const useLocal = localDM || localSM || localStore;
+    const filtDM = useLocal ? localDM : currentDtDM;
+    const filtSM = useLocal ? localSM : currentDtSM;
+    const filtStore = useLocal ? localStore : currentDtStore;
+    const sortKey = (document.getElementById("sel-store-sort") || {}).value || "structure";
+    const arr = [];
+    for (const code in DATA.store_info) {
+        const info = DATA.store_info[code];
+        if (filtDM && info.dm !== filtDM) continue;
+        if (filtSM && info.sm !== filtSM) continue;
+        if (filtStore && code !== filtStore) continue;
+        const t = targets[code] || { total: 0 };
+        const a = actuals[code] || { total: 0, dine_in: 0, delivery: 0 };
+        const m = monthly[code] || { target: 0, actual: 0 };
+        const r = dtRate(a.total, t.total);
+        const mr = dtRate(m.actual, m.target);
+        // 同比%：以 (cur - yoy) / yoy 计算
+        const y = yoy[code] || { total: 0, dine_in: 0, delivery: 0 };
+        const yoyTotal = y.total > 0 ? (a.total - y.total) / y.total : null;
+        const yoyDine  = y.dine_in > 0 ? (a.dine_in - y.dine_in) / y.dine_in : null;
+        const yoyDeli  = y.delivery > 0 ? (a.delivery - y.delivery) / y.delivery : null;
+        arr.push({ code, dm: info.dm || "", sm: info.sm || "", name: info.store_name || code, t, a, m, r, mr, yoyTotal, yoyDine, yoyDeli });
+    }
+    // 过滤掉目标为0的门店
+    let filteredArr = arr.filter(x => x.t.total > 0);
+    // 排序
+    if (sortKey === "rate_asc") {
+        filteredArr.sort((x, y) => (x.r ?? -Infinity) - (y.r ?? -Infinity));
+    } else if (sortKey === "rate_desc") {
+        filteredArr.sort((x, y) => (y.r ?? -Infinity) - (x.r ?? -Infinity));
+    } else if (sortKey === "mrate_asc") {
+        filteredArr.sort((x, y) => (x.mr ?? -Infinity) - (y.mr ?? -Infinity));
+    } else if (sortKey === "mrate_desc") {
+        filteredArr.sort((x, y) => (y.mr ?? -Infinity) - (x.mr ?? -Infinity));
+    } else {
+        // 按架构：先按区域(dm)升序，再按大店长(sm)升序
+        filteredArr.sort((x, y) => (x.dm + x.sm + x.name).localeCompare(y.dm + y.sm + y.name, "zh"));
+    }
+    const fmt = n => (n || 0).toLocaleString();
+    const pct = r => r === null ? "-" : (r * 100).toFixed(1) + "%";
+    const rows = filteredArr.map(x => {
+        return `<tr>
+            <td>${x.dm}</td>
+            <td>${x.sm}</td>
+            <td><span class="md-store-link" onclick="event.stopPropagation();dtShowTargetPopup('${x.code}', '${x.name.replace(/'/g, "\\'")}')">${x.name}</span></td>
+            <td>${fmt(x.t.total)}</td>
+            <td>${fmt(x.a.total)}</td>
+            <td class="${dtRateClass(x.r)}">${pct(x.r)}</td>
+            <td>${fmt(x.m.target)}</td>
+            <td>${fmt(x.m.actual)}</td>
+            <td class="${dtRateClass(x.mr)}">${pct(x.mr)}</td>
+        </tr>`;
+    }).join("");
+    document.getElementById("dt-store-body").innerHTML = rows || '<tr><td colspan="9" style="text-align:center;color:#999;padding:20px;">暂无数据</td></tr>';
+}
+
+function renderDailyTarget() {
+    currentDtDate = document.getElementById("sel-dt-date").value;
+    currentDtDM = document.getElementById("sel-dt-dm").value;
+    currentDtSM = document.getElementById("sel-dt-sm").value;
+    currentDtStore = (document.getElementById("sel-dt-store") || {}).value || "";
+    if (!currentDtDate) return;
+    dtRenderSummaryCards(currentDtDate);
+    dtRenderMonthlyCards(currentDtDate);
+    dtRenderDMTable(currentDtDate);
+    dtRenderSMTable(currentDtDate);
+    dtRenderStoreTable(currentDtDate);
+}
+
+// ===== 模块切换 =====
+function switchModule(module) {
+    currentModule = module;
+    document.querySelectorAll(".nav-tab").forEach(btn => btn.classList.remove("active"));
+    document.querySelectorAll(".module-section").forEach(sec => sec.classList.remove("active"));
+
+    if (module === "daily") {
+        document.querySelector(".nav-tab:nth-child(1)").classList.add("active");
+        document.getElementById("module-daily").classList.add("active");
+    } else if (module === "alert") {
+        document.querySelector(".nav-tab:nth-child(2)").classList.add("active");
+        document.getElementById("module-alert").classList.add("active");
+        renderAlert();
+    } else if (module === "daily_target") {
+        document.querySelector(".nav-tab:nth-child(3)").classList.add("active");
+        document.getElementById("module-daily-target").classList.add("active");
+        renderDailyTarget();
+    } else if (module === "weekly") {
+        document.querySelector(".nav-tab:nth-child(4)").classList.add("active");
+        document.getElementById("module-weekly").classList.add("active");
+        renderWeekly();
+    }
+}
+
+// ===== 日期变更 =====
+function onDateChange() {
+    currentDate = document.getElementById("sel-date").value;
+    document.getElementById("sel-date-alert").value = currentDate;
+    renderDaily();
+}
+
+// ===== 区经理变更 =====
+function onDMChange() {
+    const dm = document.getElementById("sel-dm").value;
+    const selSM = document.getElementById("sel-sm");
+    selSM.innerHTML = '<option value="">全部</option>';
+    if (dm && DATA.sm_by_dm[dm]) {
+        for (const sm of DATA.sm_by_dm[dm]) {
+            selSM.innerHTML += `<option value="${sm}">${sm}</option>`;
+        }
+    }
+    renderDaily();
+}
+
+// ===== 格式化百分比 =====
+function fmtPct(val) {
+    if (val === null || val === undefined) return "-";
+    const num = typeof val === "string" ? parseFloat(val) : val;
+    if (isNaN(num)) return "-";
+    const pct = (num * 100).toFixed(1) + "%";
+    if (num > 0) return "↑" + pct;
+    if (num < 0) return "↓" + pct;
+    return pct;
+}
+
+function fmtNum(val) {
+    if (val === null || val === undefined) return "-";
+    return val.toLocaleString();
+}
+
+function pctClass(val) {
+    if (val === null || val === undefined) return "val-neutral";
+    const num = typeof val === "string" ? parseFloat(val) : val;
+    if (isNaN(num)) return "val-neutral";
+    if (num < 0) return "val-negative";
+    if (num > 0) return "val-positive";
+    return "val-neutral";
+}
+
+// 走势打标：仅看同比方向
+// yoy>0 视为涨、yoy<0 视为降、yoy===0 视为持平、yoy===null 视为无数据
+function getTrendBadge(yoyPct, wowPct) {
+    const yoyHas = yoyPct !== null && !isNaN(yoyPct);
+    if (!yoyHas) return null;
+
+    const dirText = v => v > 0 ? "涨" : (v < 0 ? "降" : "持平");
+    const text = "同比" + dirText(yoyPct);
+
+    let cls;
+    if (yoyPct > 0)      cls = "trend-wow-up";      // 同比涨：绿
+    else if (yoyPct < 0) cls = "trend-wow-down";    // 同比降：红
+    else                 cls = "trend-flat";        // 同比持平：灰
+
+    return { text, cls };
+}
+
+// ===== 计算同比/环比 =====
+function calcChange(current, compare) {
+    if (!compare || compare === 0) return null;
+    return (current - compare) / compare;
+}
+
+// ===== 周度汇总辅助函数 =====
+function sumMetric(codes, sums, field) {
+    let total = 0;
+    for (const code of codes) total += (sums[code]?.[field] || 0);
+    return total;
+}
+function aggBy(sums, codes, keyField) {
+    const r = { total: {}, dine_in: {}, delivery: {} };
+    for (const code of codes) {
+        const k = sums[code][keyField];
+        r.total[k] = (r.total[k] || 0) + (sums[code].total || 0);
+        r.dine_in[k] = (r.dine_in[k] || 0) + (sums[code].dine_in || 0);
+        r.delivery[k] = (r.delivery[k] || 0) + (sums[code].delivery || 0);
+    }
+    return r;
+}
+function group5(cur, yoy, yoyPct, wow, wowPct) {
+    return `<td style="font-weight:600;">${fmtNum(cur)}</td><td>${fmtNum(yoy)}</td><td class="${pctClass(yoyPct)}">${fmtPct(yoyPct)}</td><td>${fmtNum(wow)}</td><td class="${pctClass(wowPct)}">${fmtPct(wowPct)}</td>`;
+}
+function weeklyHead3(labelThs, p, y, w) {
+    return `<tr>${labelThs}
+            <th colspan="5" style="text-align:center; font-weight:600; padding:6px 8px;">总杯数</th>
+            <th colspan="5" style="text-align:center; font-weight:600; padding:6px 8px;">堂食杯数</th>
+            <th colspan="5" style="text-align:center; font-weight:600; padding:6px 8px;">外卖杯数</th>
+        </tr><tr>
+            <th style="padding:8px 6px 2px 6px;">本周</th>
+            <th style="padding:8px 6px 2px 6px;">同比周</th>
+            <th rowspan="2" style="vertical-align:middle; padding:8px 6px;">同比增长率</th>
+            <th style="padding:8px 6px 2px 6px;">环比周</th>
+            <th rowspan="2" style="vertical-align:middle; padding:8px 6px;">环比增长率</th>
+            <th style="padding:8px 6px 2px 6px;">本周</th>
+            <th style="padding:8px 6px 2px 6px;">同比周</th>
+            <th rowspan="2" style="vertical-align:middle; padding:8px 6px;">同比增长率</th>
+            <th style="padding:8px 6px 2px 6px;">环比周</th>
+            <th rowspan="2" style="vertical-align:middle; padding:8px 6px;">环比增长率</th>
+            <th style="padding:8px 6px 2px 6px;">本周</th>
+            <th style="padding:8px 6px 2px 6px;">同比周</th>
+            <th rowspan="2" style="vertical-align:middle; padding:8px 6px;">同比增长率</th>
+            <th style="padding:8px 6px 2px 6px;">环比周</th>
+            <th rowspan="2" style="vertical-align:middle; padding:8px 6px;">环比增长率</th>
+        </tr><tr>
+            <th style="font-size:10px; font-weight:400; color:#888; padding:2px 6px 8px 6px;">${p}</th>
+            <th style="font-size:10px; font-weight:400; color:#888; padding:2px 6px 8px 6px;">${y}</th>
+            <th style="font-size:10px; font-weight:400; color:#888; padding:2px 6px 8px 6px;">${w}</th>
+            <th style="font-size:10px; font-weight:400; color:#888; padding:2px 6px 8px 6px;">${p}</th>
+            <th style="font-size:10px; font-weight:400; color:#888; padding:2px 6px 8px 6px;">${y}</th>
+            <th style="font-size:10px; font-weight:400; color:#888; padding:2px 6px 8px 6px;">${w}</th>
+            <th style="font-size:10px; font-weight:400; color:#888; padding:2px 6px 8px 6px;">${p}</th>
+            <th style="font-size:10px; font-weight:400; color:#888; padding:2px 6px 8px 6px;">${y}</th>
+            <th style="font-size:10px; font-weight:400; color:#888; padding:2px 6px 8px 6px;">${w}</th>
+        </tr>`;
+}
+
+// ===== 本地日期格式化（避免toISOString的UTC时区偏移） =====
+// 在GMT+8时区下，toISOString会把6/29 00:00转为6/28T16:00Z，slice(0,10)错误得到6/28
+function toLocalDateStr(d) {
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+// ===== 环比数据跨源查找 =====
+// 环比日期可能跨6月和7月（如7月8日环比7月1日），需从wow_data和current_data两源查找
+function lookupWowDateData(dateStr) {
+    if (DATA.wow_data[dateStr]) return DATA.wow_data[dateStr];
+    if (DATA.current_data[dateStr]) return DATA.current_data[dateStr];
+    return {};
+}
+
+// 当前周跨源查找：优先current_data，回退wow_data（处理跨月周如6/29-7/5）
+function lookupCurWeekData(dateStr) {
+    if (DATA.current_data[dateStr]) return DATA.current_data[dateStr];
+    if (DATA.wow_data[dateStr]) return DATA.wow_data[dateStr];
+    return {};
+}
+
+// ===== 每日看板渲染 =====
+function renderDaily() {
+    if (!currentDate || !DATA.current_data[currentDate]) {
+        document.getElementById("daily-cards").innerHTML = '<div class="no-data">暂无当日数据，请先在Excel中添加"2026年7月底稿"Sheet</div>';
+        document.getElementById("daily-table-body").innerHTML = "";
+        return;
+    }
+
+    const mapping = DATA.date_mapping[currentDate];
+    if (!mapping) {
+        document.getElementById("daily-cards").innerHTML = '<div class="no-data">该日期无对比映射</div>';
+        return;
+    }
+
+    const yoyDate = mapping.yoy_date;
+    const wowDate = mapping.wow_date;
+
+    const curStores = DATA.current_data[currentDate] || {};
+    const yoyStores = DATA.yoy_data[yoyDate] || {};
+    const wowStores = lookupWowDateData(wowDate);
+
+    const dmFilter = document.getElementById("sel-dm").value;
+    const smFilter = document.getElementById("sel-sm").value;
+
+    // 仅当日有实际营业数据的门店（总杯数>0）
+    const activeCodes = Object.keys(curStores).filter(code => {
+        const s = curStores[code];
+        if (s.total <= 0) return false;
+        const info = DATA.store_info[code] || {};
+        if (dmFilter && info.dm !== dmFilter) return false;
+        if (smFilter && info.sm !== smFilter) return false;
+        return true;
+    });
+
+    // 计算汇总（同期门店对比）
+    let totalCur = 0, totalYoy = 0, totalWow = 0;
+    let dineInCur = 0, dineInYoy = 0, dineInWow = 0;
+    let deliveryCur = 0, deliveryYoy = 0, deliveryWow = 0;
+    let commonCountYoy = 0, commonCountWow = 0;
+
+    // 同期门店集合
+    const commonYoyCodes = activeCodes.filter(code => yoyStores[code] && yoyStores[code].total > 0);
+    const commonWowCodes = activeCodes.filter(code => wowStores[code] && wowStores[code].total > 0);
+
+    for (const code of commonYoyCodes) {
+        totalYoy += (yoyStores[code].total || 0);
+        dineInYoy += (yoyStores[code].dine_in || 0);
+        deliveryYoy += (yoyStores[code].delivery || 0);
+    }
+    commonCountYoy = commonYoyCodes.length;
+
+    for (const code of commonWowCodes) {
+        totalWow += (wowStores[code].total || 0);
+        dineInWow += (wowStores[code].dine_in || 0);
+        deliveryWow += (wowStores[code].delivery || 0);
+    }
+    commonCountWow = commonWowCodes.length;
+
+    for (const code of activeCodes) {
+        totalCur += curStores[code].total;
+        dineInCur += curStores[code].dine_in;
+        deliveryCur += curStores[code].delivery;
+    }
+
+    const yoyPct = calcChange(totalCur, totalYoy);
+    const wowPct = calcChange(totalCur, totalWow);
+    const dineInYoyPct = calcChange(dineInCur, dineInYoy);
+    const dineInWowPct = calcChange(dineInCur, dineInWow);
+    const deliveryYoyPct = calcChange(deliveryCur, deliveryYoy);
+    const deliveryWowPct = calcChange(deliveryCur, deliveryWow);
+
+    // 显示选中日期
+    const dateDisplay = document.getElementById("selected-date-display");
+    dateDisplay.textContent = currentDate + (mapping ? ` (${mapping.weekday})` : "");
+
+    // 渲染汇总卡片
+    const cardsHtml = `
+        <div class="card">
+            <div class="card-title">当日总杯数</div>
+            <div class="card-value">${fmtNum(totalCur)}</div>
+            <div class="card-sub">营业门店 ${activeCodes.length} 家</div>
+        </div>
+        <div class="card ${yoyPct !== null && yoyPct < 0 ? 'negative' : yoyPct !== null && yoyPct > 0 ? 'positive' : ''}">
+            <div class="card-title">同比增长率</div>
+            <div class="card-value">${fmtPct(yoyPct)}</div>
+            <div class="card-sub">对比 ${yoyDate || '-'} · 共${commonCountYoy}家门店</div>
+        </div>
+        <div class="card ${wowPct !== null && wowPct < 0 ? 'negative' : wowPct !== null && wowPct > 0 ? 'positive' : ''}">
+            <div class="card-title">环比增长率</div>
+            <div class="card-value">${fmtPct(wowPct)}</div>
+            <div class="card-sub">对比 ${wowDate || '-'} · 共${commonCountWow}家门店</div>
+        </div>
+        <div class="card ${dineInYoyPct !== null && dineInYoyPct < 0 ? 'negative' : dineInYoyPct !== null && dineInYoyPct > 0 ? 'positive' : ''}">
+            <div class="card-title">堂食杯数</div>
+            <div class="card-value">${fmtNum(dineInCur)}</div>
+            <div class="card-sub">同比 ${fmtPct(dineInYoyPct)} · 环比 ${fmtPct(dineInWowPct)}</div>
+        </div>
+        <div class="card ${deliveryYoyPct !== null && deliveryYoyPct < 0 ? 'negative' : deliveryYoyPct !== null && deliveryYoyPct > 0 ? 'positive' : ''}">
+            <div class="card-title">外卖杯数</div>
+            <div class="card-value">${fmtNum(deliveryCur)}</div>
+            <div class="card-sub">同比 ${fmtPct(deliveryYoyPct)} · 环比 ${fmtPct(deliveryWowPct)}</div>
+        </div>
+    `;
+    document.getElementById("daily-cards").innerHTML = cardsHtml;
+
+    // 渲染区经理 + 大店长 维度对比表
+    renderGroupTable("dm", "dm-table-container", "dm_list", activeCodes, curStores, yoyStores, wowStores, commonYoyCodes, commonWowCodes, yoyDate, wowDate);
+    renderGroupTable("sm", "sm-table-container", "sm_list", activeCodes, curStores, yoyStores, wowStores, commonYoyCodes, commonWowCodes, yoyDate, wowDate);
+
+    // 渲染门店明细表筛选 chip（基于顶部筛选 + 同期筛选后的 activeCodes 做统计）
+    renderDailyDetailFilterChips(activeCodes, curStores, yoyStores, wowStores);
+
+    // 门店明细表额外应用 chip 多选筛选（chip 仅影响明细表，不影响卡片/对比表）
+    const detailCodes = filterActiveCodesByDetailChips(activeCodes, curStores, yoyStores, wowStores);
+    renderDailyTable(detailCodes, curStores, yoyStores, wowStores, yoyDate, wowDate);
+
+    // 渲染7月分天下降次数统计表
+    renderMonthlyDeclineFilters();
+    renderMonthlyDeclineTable();
+}
+
+// ===== 通用维度对比表（区经理 / 大店长）=====
+function renderGroupTable(groupKey, containerId, listKey, activeCodes, curStores, yoyStores, wowStores, commonYoyCodes, commonWowCodes, yoyDate, wowDate) {
+    // 按维度（dm/sm）聚合 - 同期门店口径
+    const curTotalAgg = {};
+    const yoyTotalAgg = {};
+    const wowTotalAgg = {};
+    const curDineInAgg = {};
+    const yoyDineInAgg = {};
+    const wowDineInAgg = {};
+    const curDeliveryAgg = {};
+    const yoyDeliveryAgg = {};
+    const wowDeliveryAgg = {};
+
+    // 取所有"同期门店"集合（去重）
+    const allCommonCodes = new Set([...commonYoyCodes, ...commonWowCodes]);
+
+    // 大店长表需要先按"所属区经理"再按"当日总杯数"排序，先建立 sm -> dm 的映射
+    const smToDm = {};  // sm -> 该 sm 下门店所属的 dm（取出现频次最高的）
+    for (const code of allCommonCodes) {
+        const info = DATA.store_info[code] || curStores[code] || {};
+        if (info.sm && info.dm) {
+            if (!smToDm[info.sm]) smToDm[info.sm] = {};
+            smToDm[info.sm][info.dm] = (smToDm[info.sm][info.dm] || 0) + 1;
+        }
+    }
+    // 转为单值（出现频次最高的 dm）
+    for (const sm in smToDm) {
+        const dmCounts = smToDm[sm];
+        let bestDm = "";
+        let bestCount = 0;
+        for (const dm in dmCounts) {
+            if (dmCounts[dm] > bestCount) {
+                bestDm = dm;
+                bestCount = dmCounts[dm];
+            }
+        }
+        smToDm[sm] = bestDm;
+    }
+    // 区经理排序顺序先初始化为空（聚合后再计算）
+    let dmOrder = DATA.dm_list || [];
+
+    for (const code of allCommonCodes) {
+        const info = DATA.store_info[code] || curStores[code] || {};
+        const key = info[groupKey];
+        if (!key) continue;
+
+        if (curStores[code] && curStores[code].total > 0) {
+            curTotalAgg[key] = (curTotalAgg[key] || 0) + (curStores[code].total || 0);
+            curDineInAgg[key] = (curDineInAgg[key] || 0) + (curStores[code].dine_in || 0);
+            curDeliveryAgg[key] = (curDeliveryAgg[key] || 0) + (curStores[code].delivery || 0);
+        }
+        if (yoyStores[code] && yoyStores[code].total > 0) {
+            yoyTotalAgg[key] = (yoyTotalAgg[key] || 0) + (yoyStores[code].total || 0);
+            yoyDineInAgg[key] = (yoyDineInAgg[key] || 0) + (yoyStores[code].dine_in || 0);
+            yoyDeliveryAgg[key] = (yoyDeliveryAgg[key] || 0) + (yoyStores[code].delivery || 0);
+        }
+        if (wowStores[code] && wowStores[code].total > 0) {
+            wowTotalAgg[key] = (wowTotalAgg[key] || 0) + (wowStores[code].total || 0);
+            wowDineInAgg[key] = (wowDineInAgg[key] || 0) + (wowStores[code].dine_in || 0);
+            wowDeliveryAgg[key] = (wowDeliveryAgg[key] || 0) + (wowStores[code].delivery || 0);
+        }
+    }
+
+    // 过滤出有数据的维度列表
+    const allList = DATA[listKey] || [];
+    const names = allList.filter(k => curTotalAgg[k] || yoyTotalAgg[k] || wowTotalAgg[k]);
+    const groupLabel = groupKey === "dm" ? "区经理" : "大店长";
+    // 副列标题：仅大店长表显示"区经理"
+    const showParentDm = groupKey === "sm";
+
+    if (names.length === 0) {
+        document.getElementById(containerId).innerHTML = '<div style="text-align:center;color:#999;padding:24px;">暂无数据</div>';
+        return;
+    }
+
+    // 计算区经理排序顺序（按当日总杯数降序）—— 必须在聚合完成后进行
+    dmOrder = (DATA.dm_list || []).slice().sort((a, b) => (curTotalAgg[b] || 0) - (curTotalAgg[a] || 0));
+
+    // 排序：先按"区经理当日总杯数降序"分组（区经理表无意义则按自己降序），再按"当日总杯数降序"
+    if (groupKey === "sm") {
+        names.sort((a, b) => {
+            const dmA = smToDm[a] || "";
+            const dmB = smToDm[b] || "";
+            const idxA = dmOrder.indexOf(dmA);
+            const idxB = dmOrder.indexOf(dmB);
+            // 未在 dmOrder 中则排到末尾
+            const oA = idxA === -1 ? 9999 : idxA;
+            const oB = idxB === -1 ? 9999 : idxB;
+            if (oA !== oB) return oA - oB;
+            return (curTotalAgg[b] || 0) - (curTotalAgg[a] || 0);
+        });
+    } else {
+        names.sort((a, b) => (curTotalAgg[b] || 0) - (curTotalAgg[a] || 0));
+    }
+
+    // 表格行HTML
+    // 区分 dm 表 / sm 表：dm 表只冻结 1 列，sm 表冻结 2 列
+    const stickyMainClass = showParentDm ? "wk-sticky-2 group-table-main" : "wk-sticky-1 group-table-main";
+    const rows = names.map(name => {
+        const curT = curTotalAgg[name] || 0;
+        const yoyT = yoyTotalAgg[name] || 0;
+        const wowT = wowTotalAgg[name] || 0;
+        const curD = curDineInAgg[name] || 0;
+        const yoyD = yoyDineInAgg[name] || 0;
+        const wowD = wowDineInAgg[name] || 0;
+        const curE = curDeliveryAgg[name] || 0;
+        const yoyE = yoyDeliveryAgg[name] || 0;
+        const wowE = wowDeliveryAgg[name] || 0;
+
+        const tYoyPct = yoyT > 0 ? calcChange(curT, yoyT) : null;
+        const tWowPct = wowT > 0 ? calcChange(curT, wowT) : null;
+        const dYoyPct = yoyD > 0 ? calcChange(curD, yoyD) : null;
+        const dWowPct = wowD > 0 ? calcChange(curD, wowD) : null;
+        const eYoyPct = yoyE > 0 ? calcChange(curE, yoyE) : null;
+        const eWowPct = wowE > 0 ? calcChange(curE, wowE) : null;
+
+        // 大店长表第一列展示"区经理"（用于按区聚合查看）
+        const parentDmCell = showParentDm
+            ? `<td class="wk-sticky-1 group-table-parent">${smToDm[name] || ""}</td>`
+            : "";
+
+        return `
+            <tr>
+                ${parentDmCell}
+                <td class="${stickyMainClass}">${name}</td>
+                <td class="col-num">${fmtNum(curT)}</td>
+                <td class="col-num">${fmtNum(yoyT)}</td>
+                <td class="col-num ${tYoyPct !== null ? (tYoyPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(tYoyPct)}</td>
+                <td class="col-num">${fmtNum(wowT)}</td>
+                <td class="col-num ${tWowPct !== null ? (tWowPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(tWowPct)}</td>
+                <td class="col-num">${fmtNum(curD)}</td>
+                <td class="col-num">${fmtNum(yoyD)}</td>
+                <td class="col-num ${dYoyPct !== null ? (dYoyPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(dYoyPct)}</td>
+                <td class="col-num">${fmtNum(wowD)}</td>
+                <td class="col-num ${dWowPct !== null ? (dWowPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(dWowPct)}</td>
+                <td class="col-num">${fmtNum(curE)}</td>
+                <td class="col-num">${fmtNum(yoyE)}</td>
+                <td class="col-num ${eYoyPct !== null ? (eYoyPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(eYoyPct)}</td>
+                <td class="col-num">${fmtNum(wowE)}</td>
+                <td class="col-num ${eWowPct !== null ? (eWowPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(eWowPct)}</td>
+            </tr>        `;
+    }).join("");
+
+    // 追加「墨柠汇总」行（仅区经理表 groupKey==="dm"）：求和所有区经理的聚合值
+    let totalRowHtml = "";
+    if (groupKey === "dm") {
+        const sumCurT = names.reduce((s, k) => s + (curTotalAgg[k] || 0), 0);
+        const sumYoyT = names.reduce((s, k) => s + (yoyTotalAgg[k] || 0), 0);
+        const sumWowT = names.reduce((s, k) => s + (wowTotalAgg[k] || 0), 0);
+        const sumCurD = names.reduce((s, k) => s + (curDineInAgg[k] || 0), 0);
+        const sumYoyD = names.reduce((s, k) => s + (yoyDineInAgg[k] || 0), 0);
+        const sumWowD = names.reduce((s, k) => s + (wowDineInAgg[k] || 0), 0);
+        const sumCurE = names.reduce((s, k) => s + (curDeliveryAgg[k] || 0), 0);
+        const sumYoyE = names.reduce((s, k) => s + (yoyDeliveryAgg[k] || 0), 0);
+        const sumWowE = names.reduce((s, k) => s + (wowDeliveryAgg[k] || 0), 0);
+
+        const tYoyPct = sumYoyT > 0 ? calcChange(sumCurT, sumYoyT) : null;
+        const tWowPct = sumWowT > 0 ? calcChange(sumCurT, sumWowT) : null;
+        const dYoyPct = sumYoyD > 0 ? calcChange(sumCurD, sumYoyD) : null;
+        const dWowPct = sumWowD > 0 ? calcChange(sumCurD, sumWowD) : null;
+        const eYoyPct = sumYoyE > 0 ? calcChange(sumCurE, sumYoyE) : null;
+        const eWowPct = sumWowE > 0 ? calcChange(sumCurE, sumWowE) : null;
+
+        totalRowHtml = `
+            <tr style="font-weight:700;background:#f0f2f5;">
+                <td class="${stickyMainClass}">墨柠汇总</td>
+                <td class="col-num">${fmtNum(sumCurT)}</td>
+                <td class="col-num">${fmtNum(sumYoyT)}</td>
+                <td class="col-num ${tYoyPct !== null ? (tYoyPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(tYoyPct)}</td>
+                <td class="col-num">${fmtNum(sumWowT)}</td>
+                <td class="col-num ${tWowPct !== null ? (tWowPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(tWowPct)}</td>
+                <td class="col-num">${fmtNum(sumCurD)}</td>
+                <td class="col-num">${fmtNum(sumYoyD)}</td>
+                <td class="col-num ${dYoyPct !== null ? (dYoyPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(dYoyPct)}</td>
+                <td class="col-num">${fmtNum(sumWowD)}</td>
+                <td class="col-num ${dWowPct !== null ? (dWowPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(dWowPct)}</td>
+                <td class="col-num">${fmtNum(sumCurE)}</td>
+                <td class="col-num">${fmtNum(sumYoyE)}</td>
+                <td class="col-num ${eYoyPct !== null ? (eYoyPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(eYoyPct)}</td>
+                <td class="col-num">${fmtNum(sumWowE)}</td>
+                <td class="col-num ${eWowPct !== null ? (eWowPct < 0 ? 'cell-neg' : 'cell-pos') : ''}">${fmtPct(eWowPct)}</td>
+            </tr>        `;
+    }
+
+    // 表头分组
+    // 用户选择：不冻结"区经理"th（Chrome rowspan+sticky 跨行不稳定）。
+    // 让"区经理"th 跟随 group-row 一起移动，竖向滚动时不再单独 sticky top:0。
+    // 保留 sticky left:0 让横向滚动时"区经理"列固定。
+    const parentTh = showParentDm
+        ? `<th class="wk-sticky-1 group-table-parent" rowspan="3" style="background:#2c3e50;color:#fff;font-weight:600;">区经理</th>`
+        : "";
+    // 格式化日期为 "M/D" 形式（去前导零）—— 每日看板不再显示
+    const fmtMD = (d) => {
+        if (!d) return "";
+        const m = d.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+        if (!m) return d;
+        return `${parseInt(m[2], 10)}/${parseInt(m[3], 10)}`;
+    };
+    const html = `
+        <div class="table-wrap group-table-wrap" style="max-height:calc(6 * 38px + 60px); overflow:auto;">
+            <table class="group-table group-table-${groupKey}">
+                <thead>
+                    <tr class="group-row">
+                        ${parentTh}
+                        <th class="${stickyMainClass}" rowspan="3">${groupLabel}</th>
+                        <th colspan="5">总杯数</th>
+                        <th colspan="5">堂食杯数</th>
+                        <th colspan="5">外卖杯数</th>
+                    </tr>
+                    <tr>
+                        <th class="col-num">当日</th>
+                        <th class="col-num">去年</th>
+                        <th class="col-num" rowspan="2">同比%</th>
+                        <th class="col-num">上周</th>
+                        <th class="col-num" rowspan="2">环比%</th>
+                        <th class="col-num">当日</th>
+                        <th class="col-num">去年</th>
+                        <th class="col-num" rowspan="2">同比%</th>
+                        <th class="col-num">上周</th>
+                        <th class="col-num" rowspan="2">环比%</th>
+                        <th class="col-num">当日</th>
+                        <th class="col-num">去年</th>
+                        <th class="col-num" rowspan="2">同比%</th>
+                        <th class="col-num">上周</th>
+                        <th class="col-num" rowspan="2">环比%</th>
+                    </tr>
+                    <tr class="sub-date-row">
+                        <th class="col-num">${fmtMD(currentDate || "")}</th>
+                        <th class="col-num">${fmtMD(yoyDate || "")}</th>
+                        <th class="col-num">${fmtMD(wowDate || "")}</th>
+                        <th class="col-num">${fmtMD(currentDate || "")}</th>
+                        <th class="col-num">${fmtMD(yoyDate || "")}</th>
+                        <th class="col-num">${fmtMD(wowDate || "")}</th>
+                        <th class="col-num">${fmtMD(currentDate || "")}</th>
+                        <th class="col-num">${fmtMD(yoyDate || "")}</th>
+                        <th class="col-num">${fmtMD(wowDate || "")}</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}${totalRowHtml}</tbody>
+            </table>
+        </div>
+    `;
+    document.getElementById(containerId).innerHTML = html;
+}
+
+// ===== 门店明细表 =====
+function renderDailyTable(activeCodes, curStores, yoyStores, wowStores, yoyDate, wowDate) {
+    const rows = [];
+
+    for (const code of activeCodes) {
+        const cur = curStores[code];
+        const info = DATA.store_info[code] || cur;
+
+        const yoy = yoyStores[code] || null;
+        const wow = wowStores[code] || null;
+
+        const yoyTotal = yoy ? yoy.total : null;
+        const wowTotal = wow ? wow.total : null;
+
+        const yoyPct = yoyTotal !== null && yoyTotal > 0 ? calcChange(cur.total, yoyTotal) : null;
+        const wowPct = wowTotal !== null && wowTotal > 0 ? calcChange(cur.total, wowTotal) : null;
+
+        // 堂食对比
+        const dineYoy = yoy ? yoy.dine_in : null;
+        const dineWow = wow ? wow.dine_in : null;
+        const dineYoyPct = dineYoy !== null && dineYoy > 0 ? calcChange(cur.dine_in, dineYoy) : null;
+        const dineWowPct = dineWow !== null && dineWow > 0 ? calcChange(cur.dine_in, dineWow) : null;
+
+        // 外卖对比
+        const deliYoy = yoy ? yoy.delivery : null;
+        const deliWow = wow ? wow.delivery : null;
+        const deliYoyPct = deliYoy !== null && deliYoy > 0 ? calcChange(cur.delivery, deliYoy) : null;
+        const deliWowPct = deliWow !== null && deliWow > 0 ? calcChange(cur.delivery, deliWow) : null;
+
+        rows.push({
+            dm: info.dm || "",
+            sm: info.sm || "",
+            store_name: info.store_name || cur.store_name || "",
+            total: cur.total,
+            yoy_total: yoyTotal,
+            yoy_pct: yoyPct,
+            wow_total: wowTotal,
+            wow_pct: wowPct,
+            dine_in: cur.dine_in,
+            dine_yoy: dineYoy,
+            dine_yoy_pct: dineYoyPct,
+            dine_wow: dineWow,
+            dine_wow_pct: dineWowPct,
+            delivery: cur.delivery,
+            deli_yoy: deliYoy,
+            deli_yoy_pct: deliYoyPct,
+            deli_wow: deliWow,
+            deli_wow_pct: deliWowPct,
+        });
+    }
+    // 排序：使用每日看板门店明细表自身的排序选择器（sel-daily-detail-sort）
+    const sortKey = (document.getElementById("sel-daily-detail-sort") || {}).value || "structure";
+    rows.sort((a, b) => {
+        const nameA = `${a.dm}|${a.sm}|${a.store_name}`;
+        const nameB = `${b.dm}|${b.sm}|${b.store_name}`;
+        switch (sortKey) {
+            case "total_yoy_asc": return (a.yoy_pct == null ? 1 : a.yoy_pct) - (b.yoy_pct == null ? 1 : b.yoy_pct);
+            case "total_yoy_desc": return (b.yoy_pct == null ? -1 : b.yoy_pct) - (a.yoy_pct == null ? -1 : a.yoy_pct);
+            case "dine_yoy_asc": return (a.dine_yoy_pct == null ? 1 : a.dine_yoy_pct) - (b.dine_yoy_pct == null ? 1 : b.dine_yoy_pct);
+            case "dine_yoy_desc": return (b.dine_yoy_pct == null ? -1 : b.dine_yoy_pct) - (a.dine_yoy_pct == null ? -1 : a.dine_yoy_pct);
+            case "deli_yoy_asc": return (a.deli_yoy_pct == null ? 1 : a.deli_yoy_pct) - (b.deli_yoy_pct == null ? 1 : b.deli_yoy_pct);
+            case "deli_yoy_desc": return (b.deli_yoy_pct == null ? -1 : b.deli_yoy_pct) - (a.deli_yoy_pct == null ? -1 : a.deli_yoy_pct);
+            case "structure":
+            default: return nameA.localeCompare(nameB, "zh");
+        }
+    });
+
+    const tbody = document.getElementById("daily-table-body");
+    tbody.innerHTML = rows.map(r => {
+        const trend = getTrendBadge(r.yoy_pct, r.wow_pct);
+        const trendBadge = trend
+            ? `<span class="badge trend-badge ${trend.cls}">${trend.text}</span>`
+            : "";
+
+        const dineTrend = getTrendBadge(r.dine_yoy_pct, r.dine_wow_pct);
+        const dineTrendBadge = dineTrend
+            ? `<span class="badge trend-badge ${dineTrend.cls}">${dineTrend.text}</span>`
+            : "";
+
+        const deliTrend = getTrendBadge(r.deli_yoy_pct, r.deli_wow_pct);
+        const deliTrendBadge = deliTrend
+            ? `<span class="badge trend-badge ${deliTrend.cls}">${deliTrend.text}</span>`
+            : "";
+
+        return `<tr>
+            <td>${r.dm}</td>
+            <td>${r.sm}</td>
+            <td>${r.store_name}</td>
+            <td style="font-weight:600;">${fmtNum(r.total)}</td>
+            <td>${fmtNum(r.yoy_total)}</td>
+            <td class="${pctClass(r.yoy_pct)}">${fmtPct(r.yoy_pct)}</td>
+            <td>${fmtNum(r.wow_total)}</td>
+            <td class="${pctClass(r.wow_pct)}">${fmtPct(r.wow_pct)}</td>
+            <td>${trendBadge}</td>
+            <td style="font-weight:600;">${fmtNum(r.dine_in)}</td>
+            <td>${fmtNum(r.dine_yoy)}</td>
+            <td class="${pctClass(r.dine_yoy_pct)}">${fmtPct(r.dine_yoy_pct)}</td>
+            <td>${fmtNum(r.dine_wow)}</td>
+            <td class="${pctClass(r.dine_wow_pct)}">${fmtPct(r.dine_wow_pct)}</td>
+            <td>${dineTrendBadge}</td>
+            <td style="font-weight:600;">${fmtNum(r.delivery)}</td>
+            <td>${fmtNum(r.deli_yoy)}</td>
+            <td class="${pctClass(r.deli_yoy_pct)}">${fmtPct(r.deli_yoy_pct)}</td>
+            <td>${fmtNum(r.deli_wow)}</td>
+            <td class="${pctClass(r.deli_wow_pct)}">${fmtPct(r.deli_wow_pct)}</td>
+            <td>${deliTrendBadge}</td>
+        </tr>`;
+    }).join("");
+}
+
+// ===== 7月分天下降次数统计表 =====
+
+// 渲染筛选下拉（区经理/大店长/门店combobox），级联过滤
+let mdStoreList = []; // 当前级联后的门店列表
+function renderMonthlyDeclineFilters() {
+    const allStores = DATA.store_info || {};
+
+    // 统计每个区经理/大店长的门店数
+    const dmCount = {}, smCount = {};
+    for (const code in allStores) {
+        const info = allStores[code];
+        if (info.dm) dmCount[info.dm] = (dmCount[info.dm] || 0) + 1;
+        if (info.sm) smCount[info.sm] = (smCount[info.sm] || 0) + 1;
+    }
+
+    const dmList = (DATA.dm_list || []).filter(d => dmCount[d] > 0);
+    // 大店长级联：若选了区经理，只显示该区经理下的大店长
+    const smList = (DATA.sm_list || []).filter(s => {
+        if (!smCount[s]) return false;
+        if (mdSelected.dm) {
+            const hasStore = Object.values(allStores).some(i => i.sm === s && i.dm === mdSelected.dm);
+            if (!hasStore) return false;
+        }
+        return true;
+    });
+
+    // 区经理下拉
+    const dmSel = document.getElementById("md-select-dm");
+    dmSel.innerHTML = `<option value="">全部 (${dmList.length})</option>` +
+        dmList.map(dm => `<option value="${dm}" ${mdSelected.dm === dm ? "selected" : ""}>${dm} (${dmCount[dm]})</option>`).join("");
+
+    // 大店长下拉
+    const smSel = document.getElementById("md-select-sm");
+    smSel.innerHTML = `<option value="">全部 (${smList.length})</option>` +
+        smList.map(sm => `<option value="${sm}" ${mdSelected.sm === sm ? "selected" : ""}>${sm} (${smCount[sm]})</option>`).join("");
+
+    // 门店列表（级联：受 dm/sm 筛选影响）
+    mdStoreList = Object.keys(allStores);
+    if (mdSelected.dm) mdStoreList = mdStoreList.filter(c => allStores[c].dm === mdSelected.dm);
+    if (mdSelected.sm) mdStoreList = mdStoreList.filter(c => allStores[c].sm === mdSelected.sm);
+
+    // 门店输入框：显示已选门店名
+    const storeInput = document.getElementById("md-store-input");
+    if (mdSelected.store && allStores[mdSelected.store]) {
+        storeInput.value = allStores[mdSelected.store].store_name || mdSelected.store;
+        storeInput.classList.add("has-value");
+    } else {
+        storeInput.value = "";
+        storeInput.classList.remove("has-value");
+    }
+
+    // 更新已选标签
+    document.getElementById("md-count-dm").textContent = mdSelected.dm ? `(${mdSelected.dm})` : "(全部)";
+    document.getElementById("md-count-sm").textContent = mdSelected.sm ? `(${mdSelected.sm})` : "(全部)";
+    document.getElementById("md-count-store").textContent = mdSelected.store ? `(${allStores[mdSelected.store]?.store_name || mdSelected.store})` : `(全部 ${mdStoreList.length})`;
+}
+
+// 门店 combobox 下拉渲染
+function mdRenderStoreDropdown(keyword) {
+    const dropdown = document.getElementById("md-store-dropdown");
+    const allStores = DATA.store_info || {};
+    const kw = (keyword || "").trim().toLowerCase();
+    let items = mdStoreList.map(code => ({ code, name: allStores[code]?.store_name || code, dm: allStores[code]?.dm || "", sm: allStores[code]?.sm || "" }));
+    if (kw) {
+        items = items.filter(i => i.name.toLowerCase().includes(kw) || i.code.toLowerCase().includes(kw) || i.dm.toLowerCase().includes(kw) || i.sm.toLowerCase().includes(kw));
+    }
+    // 按 dm→sm→name 排序
+    items.sort((a, b) => (a.dm + a.sm + a.name).localeCompare(b.dm + b.sm + b.name, "zh"));
+
+    if (items.length === 0) {
+        dropdown.innerHTML = `<div class="dd-combobox-empty">无匹配门店</div>`;
+        return;
+    }
+    dropdown.innerHTML = items.map(i => {
+        const sel = mdSelected.store === i.code ? " selected" : "";
+        return `<div class="dd-combobox-item${sel}" onclick="mdPickStore('${i.code}')">${i.name}<span class="dd-item-sub">${i.dm} / ${i.sm}</span></div>`;
+    }).join("");
+}
+
+function mdOpenStoreDropdown() {
+    const input = document.getElementById("md-store-input");
+    const dropdown = document.getElementById("md-store-dropdown");
+    if (!mdSelected.store) {
+        input.value = "";
+        input.classList.remove("has-value");
+    }
+    mdRenderStoreDropdown(input.value);
+    dropdown.classList.add("open");
+}
+
+function mdCloseStoreDropdown() {
+    document.getElementById("md-store-dropdown").classList.remove("open");
+}
+
+function mdPickStore(code) {
+    mdSelected.store = code;
+    mdCloseStoreDropdown();
+    renderMonthlyDeclineFilters();
+    renderMonthlyDeclineTable();
+}
+
+function mdClearStore(e) {
+    if (e) e.stopPropagation();
+    mdSelected.store = "";
+    const input = document.getElementById("md-store-input");
+    input.value = "";
+    input.classList.remove("has-value");
+    renderMonthlyDeclineFilters();
+    renderMonthlyDeclineTable();
+}
+
+// select 变化回调（区经理/大店长）
+function onMonthlyDeclineFilterChange() {
+    mdSelected.dm = document.getElementById("md-select-dm").value;
+    mdSelected.sm = document.getElementById("md-select-sm").value;
+    // 若已选门店不在级联范围内，清空门店选择
+    if (mdSelected.store) {
+        const info = DATA.store_info[mdSelected.store];
+        if (mdSelected.dm && info.dm !== mdSelected.dm) mdSelected.store = "";
+        if (mdSelected.sm && info.sm !== mdSelected.sm) mdSelected.store = "";
+    }
+    renderMonthlyDeclineFilters();
+    renderMonthlyDeclineTable();
+}
+
+// 清空筛选
+function clearMonthlyDeclineFilters() {
+    mdSelected.dm = "";
+    mdSelected.sm = "";
+    mdSelected.store = "";
+    document.getElementById("md-select-sort").value = "structure";
+    renderMonthlyDeclineFilters();
+    renderMonthlyDeclineTable();
+}
+
+// 绑定门店 combobox 事件
+function bindMdStoreCombobox() {
+    const input = document.getElementById("md-store-input");
+    const combobox = document.getElementById("md-store-combobox");
+    input.addEventListener("focus", mdOpenStoreDropdown);
+    input.addEventListener("input", () => mdRenderStoreDropdown(input.value));
+    document.getElementById("md-store-clear").addEventListener("click", mdClearStore);
+    document.addEventListener("click", (e) => {
+        if (!combobox.contains(e.target)) mdCloseStoreDropdown();
+    });
+}
+
+function renderMonthlyDeclineTable() {
+    const allDates = Object.keys(DATA.current_data || {}).sort();
+    const rows = [];
+
+    for (const code in DATA.store_info) {
+        const info = DATA.store_info[code];
+        if (mdSelected.dm && info.dm !== mdSelected.dm) continue;
+        if (mdSelected.sm && info.sm !== mdSelected.sm) continue;
+        if (mdSelected.store && code !== mdSelected.store) continue;
+
+        let bizDays = 0, yoyDecline = 0, yoyRise = 0, wowDecline = 0, wowRise = 0;
+        for (const dateStr of allDates) {
+            const cur = (DATA.current_data[dateStr] || {})[code];
+            if (!cur || (cur.total || 0) <= 0) continue;
+            bizDays++;
+            const mapping = DATA.date_mapping[dateStr];
+            if (mapping) {
+                // 同比
+                if (mapping.yoy_date) {
+                    const yoy = (DATA.yoy_data[mapping.yoy_date] || {})[code];
+                    if (yoy && (yoy.total || 0) > 0) {
+                        if (cur.total < yoy.total) yoyDecline++;
+                        else if (cur.total > yoy.total) yoyRise++;
+                    }
+                }
+                // 环比
+                if (mapping.wow_date) {
+                    const wowStore = lookupWowDateData(mapping.wow_date)[code];
+                    if (wowStore && (wowStore.total || 0) > 0) {
+                        if (cur.total < wowStore.total) wowDecline++;
+                        else if (cur.total > wowStore.total) wowRise++;
+                    }
+                }
+            }
+        }
+        if (bizDays === 0) continue;
+        rows.push({ code, dm: info.dm || "", sm: info.sm || "", name: info.store_name || code, bizDays, yoyDecline, yoyRise, wowDecline, wowRise });
+    }
+
+    // 排序
+    const sortMode = (document.getElementById("md-select-sort") || {}).value || "structure";
+    const sortFieldMap = {
+        yoy_decline_asc: ["yoyDecline", 1],
+        yoy_decline_desc: ["yoyDecline", -1],
+        yoy_rise_asc: ["yoyRise", 1],
+        yoy_rise_desc: ["yoyRise", -1],
+        wow_decline_asc: ["wowDecline", 1],
+        wow_decline_desc: ["wowDecline", -1],
+        wow_rise_asc: ["wowRise", 1],
+        wow_rise_desc: ["wowRise", -1],
+    };
+    if (sortMode === "structure") {
+        rows.sort((a, b) => (a.dm + a.sm + a.name).localeCompare(b.dm + b.sm + b.name, "zh"));
+    } else {
+        const [field, dir] = sortFieldMap[sortMode] || ["yoyDecline", 1];
+        rows.sort((a, b) => (a[field] - b[field]) * dir);
+    }
+
+    const html = rows.map(r => {
+        return `<tr>
+            <td>${r.dm}</td>
+            <td>${r.sm}</td>
+            <td><span class="md-store-link" onclick="event.stopPropagation();mdShowStorePopup('${r.code}', '${r.name.replace(/'/g, "\\'")}')">${r.name}</span></td>
+            <td>${r.bizDays}</td>
+            <td>${r.yoyDecline}</td>
+            <td>${r.yoyRise}</td>
+            <td>${r.wowDecline}</td>
+            <td>${r.wowRise}</td>
+        </tr>`;
+    }).join("");
+    document.getElementById("monthly-decline-body").innerHTML = html || '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px;">暂无数据</td></tr>';
+}
+
+// ===== 门店7月分天同比环比弹窗 =====
+const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+function fmtWeekday(dateStr) {
+    const parts = dateStr.split("-");
+    const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+    return WEEKDAYS[d.getDay()];
+}
+function mdShowStorePopup(code, name) {
+    try {
+    const allDates = Object.keys(DATA.current_data || {}).sort();
+    const rows = [];
+    for (const dateStr of allDates) {
+        const cur = (DATA.current_data[dateStr] || {})[code];
+        const curTotal = cur ? (cur.total || 0) : 0;
+        const mapping = DATA.date_mapping[dateStr] || {};
+
+        let yoyTotal = 0, yoyPct = null;
+        if (mapping.yoy_date) {
+            const yoy = (DATA.yoy_data[mapping.yoy_date] || {})[code];
+            if (yoy && (yoy.total || 0) > 0) {
+                yoyTotal = yoy.total;
+                yoyPct = (curTotal - yoyTotal) / yoyTotal;
+            }
+        }
+
+        let wowTotal = 0, wowPct = null;
+        if (mapping.wow_date) {
+            const wowStore = lookupWowDateData(mapping.wow_date)[code];
+            if (wowStore && (wowStore.total || 0) > 0) {
+                wowTotal = wowStore.total;
+                wowPct = (curTotal - wowTotal) / wowTotal;
+            }
+        }
+
+        rows.push({ dateStr, curTotal, yoyTotal, yoyPct, wowTotal, wowPct, yoyDate: mapping.yoy_date || "", wowDate: mapping.wow_date || "" });
+    }
+
+    const fmtPct2 = (v) => v === null ? '<span style="color:#ccc;">-</span>' : (v >= 0 ? `<span style="color:#1e8449;">+${(v * 100).toFixed(1)}%</span>` : `<span style="color:#c0392b;">${(v * 100).toFixed(1)}%</span>`);
+    const fmtNum2 = (v) => v > 0 ? v : '<span style="color:#ccc;">-</span>';
+
+    const bodyHtml = `<table class="md-popup-table">
+        <thead>
+            <tr>
+                <th>日期</th>
+                <th>当日杯数</th>
+                <th>同比日杯数</th>
+                <th>同比%</th>
+                <th>环比日杯数</th>
+                <th>环比%</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${rows.map(r => `<tr>
+                <td>${r.dateStr} <span style="color:#999;font-size:12px;">${fmtWeekday(r.dateStr)}</span></td>
+                <td style="font-weight:600;">${r.curTotal > 0 ? r.curTotal : '<span style="color:#ccc;">-</span>'}</td>
+                <td>${fmtNum2(r.yoyTotal)}</td>
+                <td>${fmtPct2(r.yoyPct)}</td>
+                <td>${fmtNum2(r.wowTotal)}</td>
+                <td>${fmtPct2(r.wowPct)}</td>
+            </tr>`).join("")}
+        </tbody>
+    </table>`;
+
+    document.getElementById("md-store-popup-title").textContent = name + " — 7月分天同比/环比";
+    document.getElementById("md-store-popup-body").innerHTML = bodyHtml;
+    document.getElementById("md-store-popup").style.display = "flex";
+    } catch(err) {
+        alert("弹窗加载失败: " + err.message);
+    }
+}
+
+function mdCloseStorePopup() {
+    document.getElementById("md-store-popup").style.display = "none";
+}
+
+// ===== 门店7月分天目标达成弹窗 =====
+function dtShowTargetPopup(code, name) {
+    try {
+    const allDates = Object.keys(DATA.current_data || {}).sort();
+    const rows = [];
+    for (const dateStr of allDates) {
+        const cur = (DATA.current_data[dateStr] || {})[code];
+        const curTotal = cur ? (cur.total || 0) : 0;
+        const targetDay = DATA.daily_target || {};
+        const target = (targetDay[dateStr] || {})[code] || 0;
+        const rate = target > 0 ? curTotal / target : null;
+        rows.push({ dateStr, target, curTotal, rate });
+    }
+
+    const fmtNum2 = (v) => v > 0 ? v.toLocaleString() : '<span style="color:#ccc;">-</span>';
+    const fmtRate = (r) => {
+        if (r === null) return '<span style="color:#ccc;">-</span>';
+        const pct = (r * 100).toFixed(1) + "%";
+        if (r >= 1.0) return `<span style="color:#1e8449;font-weight:600;">${pct}</span>`;
+        if (r >= 0.9) return `<span style="color:#888;">${pct}</span>`;
+        return `<span style="color:#c0392b;font-weight:600;">${pct}</span>`;
+    };
+
+    const bodyHtml = `<table class="md-popup-table">
+        <thead>
+            <tr>
+                <th>日期</th>
+                <th>当日目标杯数</th>
+                <th>当日实际杯数</th>
+                <th>达成率</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${rows.map(r => `<tr>
+                <td>${r.dateStr} <span style="color:#999;font-size:12px;">${fmtWeekday(r.dateStr)}</span></td>
+                <td>${fmtNum2(r.target)}</td>
+                <td style="font-weight:600;">${r.curTotal > 0 ? r.curTotal.toLocaleString() : '<span style="color:#ccc;">-</span>'}</td>
+                <td>${fmtRate(r.rate)}</td>
+            </tr>`).join("")}
+        </tbody>
+    </table>`;
+
+    document.getElementById("dt-target-popup-title").textContent = name + " — 7月分天目标达成";
+    document.getElementById("dt-target-popup-body").innerHTML = bodyHtml;
+    document.getElementById("dt-target-popup").style.display = "flex";
+    } catch(err) {
+        alert("弹窗加载失败: " + err.message);
+    }
+}
+
+function dtCloseTargetPopup() {
+    document.getElementById("dt-target-popup").style.display = "none";
+}
+
+// ===== 门店明细表筛选 chip =====
+// 渠道预警类型已删除，走势列已替代
+
+// 渲染筛选 select：每次 renderDaily 时调用，保证 option 列表与当前数据同步
+function renderDailyDetailFilterChips(activeCodes, curStores, yoyStores, wowStores) {
+    // 统计每个区经理/大店长/门店的命中数
+    const dmCount = {};
+    const smCount = {};
+
+    for (const code of activeCodes) {
+        const cur = curStores[code];
+        const info = DATA.store_info[code] || cur || {};
+        const dm = info.dm || "";
+        const sm = info.sm || "";
+        if (dm) dmCount[dm] = (dmCount[dm] || 0) + 1;
+        if (sm) smCount[sm] = (smCount[sm] || 0) + 1;
+    }
+
+    // 排序：区经理按 DATA.dm_list 顺序，大店长按 DATA.sm_list 顺序
+    const dmList = (DATA.dm_list || []).filter(d => dmCount[d] > 0);
+    const smList = (DATA.sm_list || []).filter(s => smCount[s] > 0);
+
+    // 渲染区经理 select（单选，"全部" 为默认）
+    const dmSel = document.getElementById("dd-select-dm");
+    dmSel.innerHTML = `<option value="">全部 (${dmList.length})</option>` +
+        dmList.map(dm => {
+            const sel = ddSelected.dm === dm ? "selected" : "";
+            return `<option value="${dm}" ${sel}>${dm} (${dmCount[dm]})</option>`;
+        }).join("");
+
+    // 渲染大店长 select
+    const smSel = document.getElementById("dd-select-sm");
+    smSel.innerHTML = `<option value="">全部 (${smList.length})</option>` +
+        smList.map(sm => {
+            const sel = ddSelected.sm === sm ? "selected" : "";
+            return `<option value="${sm}" ${sel}>${sm} (${smCount[sm]})</option>`;
+        }).join("");
+
+    // 更新每个组的"已选 X / 全部"标签
+    updateDDSelectedCount();
+}
+
+// 同步 2 个下拉的选中数显示
+function updateDDSelectedCount() {
+    function fmt(val, name) {
+        return val ? `(${name})` : "(全部)";
+    }
+    document.getElementById("dd-count-dm").textContent = fmt(ddSelected.dm, ddSelected.dm);
+    document.getElementById("dd-count-sm").textContent = fmt(ddSelected.sm, ddSelected.sm);
+}
+
+// select 变化回调：从 DOM 读取已选值，同步到 ddSelected，再触发过滤
+function onDailyDetailSelectChange() {
+    ddSelected.dm = document.getElementById("dd-select-dm").value;
+    ddSelected.sm = document.getElementById("dd-select-sm").value;
+    updateDDSelectedCount();
+    renderDaily();
+}
+
+// 清空所有筛选：reset DOM + ddSelected
+function clearDailyDetailFilters() {
+    document.getElementById("dd-select-dm").value = "";
+    document.getElementById("dd-select-sm").value = "";
+    ddSelected.dm = "";
+    ddSelected.sm = "";
+    updateDDSelectedCount();
+    renderDaily();
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+
+// 读取当前筛选状态，用于在 renderDailyTable 前过滤 activeCodes
+function filterActiveCodesByDetailChips(codes, curStores, yoyStores, wowStores) {
+    if (!ddSelected.dm && !ddSelected.sm) {
+        return codes;
+    }
+    return codes.filter(code => {
+        const cur = curStores[code];
+        if (!cur) return false;
+        const info = DATA.store_info[code] || cur || {};
+        // 区经理筛选
+        if (ddSelected.dm) {
+            const dm = info.dm || "";
+            if (dm !== ddSelected.dm) return false;
+        }
+        // 大店长筛选
+        if (ddSelected.sm) {
+            const sm = info.sm || "";
+            if (sm !== ddSelected.sm) return false;
+        }
+        return true;
+    });
+}
+
+// 解析日期范围工具函数（YYYY/M/D-YYYY/M/D 格式）
+function parseRange(rangeStr) {
+    if (!rangeStr) return null;
+    const parts = rangeStr.split("-");
+    if (parts.length !== 2) return null;
+    function parseSlash(s) {
+        const segs = s.trim().split("/");
+        if (segs.length === 3) {
+            return new Date(parseInt(segs[0]), parseInt(segs[1]) - 1, parseInt(segs[2]));
+        }
+        return null;
+    }
+    const start = parseSlash(parts[0]);
+    const end = parseSlash(parts[1]);
+    if (!start || !end) return null;
+    return { start, end };
+}
+
+// 初始化「统计周」下拉框：每周一作为周开始，范围 2026/6/29 - 2026/9/30
+function initWeekSelect() {
+    const sel = document.getElementById("sel-week-weekly");
+    if (!sel || sel.options.length > 0) return;  // 已初始化过
+
+    // 从6/29（周一）开始，覆盖跨月的第一周
+    const start = new Date(2026, 5, 29);  // 2026/6/29
+    const end = new Date(2026, 8, 30);   // 2026/9/30
+
+    const current = new Date(start);
+    while (current <= end) {
+        const weekEnd = new Date(current);
+        weekEnd.setDate(weekEnd.getDate() + 6);
+        const startStr = `${current.getFullYear()}/${current.getMonth() + 1}/${current.getDate()}`;
+        const endStr = `${weekEnd.getFullYear()}/${weekEnd.getMonth() + 1}/${weekEnd.getDate()}`;
+        const valueStr = toLocalDateStr(current);
+        const opt = document.createElement("option");
+        opt.value = valueStr;
+        opt.textContent = `${startStr} - ${endStr}`;
+        sel.appendChild(opt);
+        current.setDate(current.getDate() + 7);
+    }
+}
+
+// ===== 周度汇总 =====
+function renderWeekly() {
+    const dmFilter = document.getElementById("sel-dm-weekly").value;
+    const weekSel = document.getElementById("sel-week-weekly");
+    const weekFilter = weekSel.value;  // 单选："" 表示「未选择」
+
+    // 解析周度映射
+    const weeklyData = DATA.weekly_mapping;
+    const totalBody = document.getElementById("weekly-total-body");
+    const dmBody = document.getElementById("weekly-dm-body");
+    const smBody = document.getElementById("weekly-sm-body");
+
+    // 初始化统计周下拉框（每周一为周开始，2026/6/29 - 2026/9/30 范围）
+    initWeekSelect();
+
+    if (!weeklyData || weeklyData.length === 0) {
+        totalBody.innerHTML = '<tr><td colspan="9" class="no-data">暂无周度数据</td></tr>';
+        return;
+    }
+
+    // 默认展示最新一周有数据的周：
+    // 1) 当前日期所在周（若该周有数据）
+    // 2) 否则取最近一个含 current_data 的周
+    let effectiveWeek = weekFilter;
+    if (!effectiveWeek) {
+        const today = new Date();
+        // 找到当前日期所在周的周一
+        const dow = (today.getDay() + 6) % 7;  // 0=Mon
+        const monday = new Date(today);
+        monday.setDate(monday.getDate() - dow);
+        const todayWeekKey = toLocalDateStr(monday);
+        const todayWeek = weeklyData.find(w => {
+            const r = parseRange(w.period);
+            return r && toLocalDateStr(r.start) === todayWeekKey;
+        });
+
+        const hasData = week => {
+            const r = parseRange(week.period);
+            if (!r) return false;
+            const dates = dateRange(r.start, r.end);
+            return dates.some(d => DATA.current_data[d]);
+        };
+
+        if (todayWeek && hasData(todayWeek)) {
+            effectiveWeek = todayWeekKey;
+        } else {
+            // 从后往前找第一个有数据的周
+            for (let i = weeklyData.length - 1; i >= 0; i--) {
+                if (hasData(weeklyData[i])) {
+                    const r = parseRange(weeklyData[i].period);
+                    effectiveWeek = toLocalDateStr(r.start);
+                    break;
+                }
+            }
+        }
+
+        if (effectiveWeek && weekSel.value !== effectiveWeek) {
+            weekSel.value = effectiveWeek;
+        }
+    }
+
+    // 根据选中的统计周过滤数据
+    let filteredWeeklyData = weeklyData;
+    if (effectiveWeek) {
+        filteredWeeklyData = weeklyData.filter(w => {
+            const r = parseRange(w.period);
+            if (!r) return false;
+            const startStr = toLocalDateStr(r.start);
+            return startStr === effectiveWeek;
+        });
+    }
+
+    const currentDates = DATA.available_dates_current;
+
+    // 预先计算表头用的日期（基于 effectiveWeek 命中的行，没有则用第一个）
+    const headWeek = filteredWeeklyData[0] || weeklyData[0] || {};
+    const hp = headWeek.period || "";
+    const hy = headWeek.yoy_period || "";
+    const hw = headWeek.wow_period || "";
+    const totalHead = document.getElementById("weekly-total-head");
+    totalHead.innerHTML = weeklyHead3('<th rowspan="3" class="wk-sticky-1" style="vertical-align:middle; padding:10px 8px 4px 8px;">区域</th>', hp, hy, hw);
+
+    if (currentDates.length === 0) {
+        totalBody.innerHTML = '<tr><td colspan="16" class="no-data">暂无7月日度数据</td></tr>';
+        return;
+    }
+
+    // 辅助函数：解析日期范围（提升到 renderWeekly 顶层，避免在循环内重复定义）
+    // （原 parseRange 函数体保留在下方）
+
+    // 生成日期列表（start到end）
+    function dateRange(start, end) {
+        const dates = [];
+        const cur = new Date(start);
+        while (cur <= end) {
+            dates.push(toLocalDateStr(cur));
+            cur.setDate(cur.getDate() + 1);
+        }
+        return dates;
+    }
+
+    // 从指定数据源查找某日期的门店数据
+    function weekSumFromSource(dateList, sourceFn) {
+        const storeSums = {};
+        for (const d of dateList) {
+            const stores = sourceFn(d);
+            for (const [code, info] of Object.entries(stores)) {
+                if (!storeSums[code]) storeSums[code] = { total: 0, dine_in: 0, delivery: 0, days: 0, dm: "", sm: "", store_name: "" };
+                storeSums[code].total += info.total || 0;
+                storeSums[code].dine_in += info.dine_in || 0;
+                storeSums[code].delivery += info.delivery || 0;
+                if (info.total > 0) storeSums[code].days += 1;
+                const si = DATA.store_info[code] || {};
+                storeSums[code].dm = si.dm || info.dm || "";
+                storeSums[code].sm = si.sm || info.sm || "";
+                storeSums[code].store_name = si.store_name || info.store_name || "";
+            }
+        }
+        return storeSums;
+    }
+
+    // 查找特定用途的日期数据
+    function lookupYoyData(dateStr) { return DATA.yoy_data[dateStr] || {}; }
+    // 当前周数据：跨源查找（优先current_data，回退wow_data，处理跨月周如6/29-7/5）
+    // 环比数据使用全局跨源查找函数 lookupWowDateData
+
+    const rows = [];
+
+    for (const w of filteredWeeklyData) {
+        const periodRange = parseRange(w.period);
+        const yoyRange = parseRange(w.yoy_period);
+        const wowRange = parseRange(w.wow_period);
+
+        if (!periodRange) continue;
+
+        const periodDates = dateRange(periodRange.start, periodRange.end);
+        const yoyDates = yoyRange ? dateRange(yoyRange.start, yoyRange.end) : [];
+        const wowDates = wowRange ? dateRange(wowRange.start, wowRange.end) : [];
+
+        // 只取有数据的日期（当前周跨源：优先current_data，回退wow_data）
+        const curValidDates = periodDates.filter(d => lookupCurWeekData(d) && Object.keys(lookupCurWeekData(d)).length > 0);
+        // 同比数据只从yoy_data查找
+        const yoyValidDates = yoyDates.filter(d => DATA.yoy_data[d]);
+        // 环比数据可能跨6月和7月
+        const wowValidDates = wowDates.filter(d => lookupWowDateData(d) && Object.keys(lookupWowDateData(d)).length > 0);
+
+        // 没有当前周数据时仍保留行，用于展示同比/环比周杯数
+        const hasCurData = curValidDates.length > 0;
+        const hasYoyData = yoyValidDates.length > 0;
+        const hasWowData = wowValidDates.length > 0;
+
+        const curSum = hasCurData ? weekSumFromSource(curValidDates, lookupCurWeekData) : {};
+        const yoySum = hasYoyData ? weekSumFromSource(yoyValidDates, lookupYoyData) : {};
+        const wowSum = hasWowData ? weekSumFromSource(wowValidDates, lookupWowDateData) : {};
+
+        // 同期门店对比（有当前周数据时取交集，无当前周数据时不取交集）
+        const commonYoyCodes = hasCurData && hasYoyData ? Object.keys(curSum).filter(code =>
+            curSum[code].total > 0 && yoySum[code] && yoySum[code].total > 0
+        ) : [];
+        const commonWowCodes = hasCurData && hasWowData ? Object.keys(curSum).filter(code =>
+            curSum[code].total > 0 && wowSum[code] && wowSum[code].total > 0
+        ) : [];
+
+    // ===== 按总杯数/堂食/外卖分别聚合 =====
+    // 本周杯数 = curSum全部门店累加（当前周所有有数据的门店，按用户要求）
+    // 同比周/环比周 = 取交集后累加（确保对比口径公平）
+    // 增长率：本周∩同比/∩环比 部分 vs 同比/环比周
+    const tAgg = {};
+    if (hasCurData) {
+        const curAll = Object.keys(curSum).filter(code => curSum[code].total > 0);
+        tAgg.cur = { total: sumMetric(curAll, curSum, 'total'), dine_in: sumMetric(curAll, curSum, 'dine_in'), delivery: sumMetric(curAll, curSum, 'delivery') };
+        tAgg.yoy = { total: sumMetric(commonYoyCodes, yoySum, 'total'), dine_in: sumMetric(commonYoyCodes, yoySum, 'dine_in'), delivery: sumMetric(commonYoyCodes, yoySum, 'delivery') };
+        tAgg.wow = { total: sumMetric(commonWowCodes, wowSum, 'total'), dine_in: sumMetric(commonWowCodes, wowSum, 'dine_in'), delivery: sumMetric(commonWowCodes, wowSum, 'delivery') };
+        // 同比增长率用本周∩同比门店的杯数 vs 同比周
+        tAgg.curForYoy = { total: sumMetric(commonYoyCodes, curSum, 'total'), dine_in: sumMetric(commonYoyCodes, curSum, 'dine_in'), delivery: sumMetric(commonYoyCodes, curSum, 'delivery') };
+        tAgg.curForWow = { total: sumMetric(commonWowCodes, curSum, 'total'), dine_in: sumMetric(commonWowCodes, curSum, 'dine_in'), delivery: sumMetric(commonWowCodes, curSum, 'delivery') };
+    } else {
+        // 无当前周数据时：本周杯数置零，同比/环比周仍展示（取各自所有有数据门店累加）
+        const yoyAll = Object.keys(yoySum), wowAll = Object.keys(wowSum);
+        tAgg.cur = { total: 0, dine_in: 0, delivery: 0 };
+        tAgg.yoy = { total: sumMetric(yoyAll, yoySum, 'total'), dine_in: sumMetric(yoyAll, yoySum, 'dine_in'), delivery: sumMetric(yoyAll, yoySum, 'delivery') };
+        tAgg.wow = { total: sumMetric(wowAll, wowSum, 'total'), dine_in: sumMetric(wowAll, wowSum, 'dine_in'), delivery: sumMetric(wowAll, wowSum, 'delivery') };
+    }
+
+        // 同比/环比增长率（按渠道）- 增长率用 curForYoy/curForWow（交集门店的本周杯数）
+        const yoyP = {}, wowP = {};
+        if (hasCurData) {
+            for (const m of ['total', 'dine_in', 'delivery']) {
+                yoyP[m] = tAgg.yoy[m] > 0 ? calcChange(tAgg.curForYoy[m], tAgg.yoy[m]) : null;
+                wowP[m] = tAgg.wow[m] > 0 ? calcChange(tAgg.curForWow[m], tAgg.wow[m]) : null;
+            }
+        } else {
+            for (const m of ['total', 'dine_in', 'delivery']) { yoyP[m] = null; wowP[m] = null; }
+        }
+
+        // 区经理聚合（按渠道）
+        const dmA = {};
+        if (hasCurData) {
+            const curAll = Object.keys(curSum).filter(code => curSum[code].total > 0);
+            dmA.cur = aggBy(curSum, curAll, 'dm');  // 本周 = 全部门店
+            dmA.curWow = aggBy(curSum, curAll, 'dm');  // 环比对照用 = 全部门店
+            dmA.yoy = aggBy(yoySum, commonYoyCodes, 'dm');  // 同比 = 交集
+            dmA.wow = aggBy(wowSum, commonWowCodes, 'dm');  // 环比 = 交集
+        } else {
+            // 无当前周数据：cur 置空，yoy/wow 按各自所有有数据门店聚合
+            dmA.cur = { total: {}, dine_in: {}, delivery: {} };
+            dmA.curWow = { total: {}, dine_in: {}, delivery: {} };
+            dmA.yoy = aggBy(yoySum, Object.keys(yoySum).filter(c => yoySum[c].total > 0), 'dm');
+            dmA.wow = aggBy(wowSum, Object.keys(wowSum).filter(c => wowSum[c].total > 0), 'dm');
+        }
+
+        // 大店长聚合（按渠道）
+        const smA = {};
+        const smDmM = {};
+        if (hasCurData) {
+            const curAll = Object.keys(curSum).filter(code => curSum[code].total > 0);
+            smA.cur = aggBy(curSum, curAll, 'sm');
+            smA.curWow = aggBy(curSum, curAll, 'sm');
+            smA.yoy = aggBy(yoySum, commonYoyCodes, 'sm');
+            smA.wow = aggBy(wowSum, commonWowCodes, 'sm');
+            for (const code of curAll) smDmM[curSum[code].sm] = curSum[code].dm;
+        } else {
+            // 无当前周数据：cur 置空，yoy/wow 按各自所有有数据门店聚合
+            smA.cur = { total: {}, dine_in: {}, delivery: {} };
+            smA.curWow = { total: {}, dine_in: {}, delivery: {} };
+            smA.yoy = aggBy(yoySum, Object.keys(yoySum).filter(c => yoySum[c].total > 0), 'sm');
+            smA.wow = aggBy(wowSum, Object.keys(wowSum).filter(c => wowSum[c].total > 0), 'sm');
+            for (const code of Object.keys(yoySum).filter(c => yoySum[c].total > 0)) smDmM[yoySum[code].sm] = yoySum[code].dm;
+            for (const code of Object.keys(wowSum).filter(c => wowSum[c].total > 0)) if (!smDmM[wowSum[code].sm]) smDmM[wowSum[code].sm] = wowSum[code].dm;
+        }
+
+        rows.push({
+            period: w.period,
+            yoy_period: w.yoy_period || "-",
+            wow_period: w.wow_period || "-",
+            totalAgg: tAgg,
+            yoyPct: yoyP,
+            wowPct: wowP,
+            commonStores: commonYoyCodes.length,
+            curValidDates,
+            yoyValidDates,
+            wowValidDates,
+            dmAgg: dmA,
+            smAgg: smA,
+            smDmMap: smDmM,
+            storeSums: { cur: curSum, yoy: yoySum, wow: wowSum },
+            commonYoyCodes,
+            commonWowCodes,
+            hasCurData,
+        });
+    }
+
+    // 渲染周度总表
+    totalBody.innerHTML = rows.map(r => `<tr>
+        <td class="wk-sticky-1" style="font-weight:600; color:#2c3e50;">墨柠大盘</td>
+        ${group5(r.totalAgg.cur.total, r.totalAgg.yoy.total, r.yoyPct.total, r.totalAgg.wow.total, r.wowPct.total)}
+        ${group5(r.totalAgg.cur.dine_in, r.totalAgg.yoy.dine_in, r.yoyPct.dine_in, r.totalAgg.wow.dine_in, r.wowPct.dine_in)}
+        ${group5(r.totalAgg.cur.delivery, r.totalAgg.yoy.delivery, r.yoyPct.delivery, r.totalAgg.wow.delivery, r.wowPct.delivery)}
+    </tr>`).join("");
+
+    // 渲染区经理周度对比表
+    const dmHead = document.getElementById("weekly-dm-head");
+    dmHead.innerHTML = weeklyHead3('<th rowspan="3" class="wk-sticky-1" style="vertical-align:middle; padding:10px 8px 4px 8px;">区经理</th>', hp, hy, hw);
+
+    let dmRows = [];
+    for (const r of rows) {
+        const hasCur = r.hasCurData;
+        const dmNames = hasCur
+            ? Object.keys(r.dmAgg.cur.total)
+            : Array.from(new Set([...Object.keys(r.dmAgg.yoy.total), ...Object.keys(r.dmAgg.wow.total)]));
+        for (const dm of dmNames) {
+            if (dmFilter && dm !== dmFilter) continue;
+            const m = ['total', 'dine_in', 'delivery'];
+            const d = {};
+            for (const k of m) {
+                d[k] = {
+                    cur: hasCur ? (r.dmAgg.cur[k][dm] || 0) : 0,
+                    yoy: r.dmAgg.yoy[k]?.[dm] || 0,
+                    yoyPct: hasCur && r.dmAgg.yoy[k]?.[dm] ? calcChange(r.dmAgg.cur[k][dm], r.dmAgg.yoy[k][dm]) : null,
+                    wow: r.dmAgg.wow[k]?.[dm] || 0,
+                    wowPct: hasCur && r.dmAgg.wow[k]?.[dm] ? calcChange(r.dmAgg.curWow[k][dm], r.dmAgg.wow[k][dm]) : null,
+                };
+            }
+            dmRows.push({ dm, ...d });
+        }
+    }
+    // 排序：按区经理（dm_list顺序）升序
+    const dmOrderList = DATA.dm_list || [];
+    dmRows.sort((a, b) => {
+        const idxA = dmOrderList.indexOf(a.dm);
+        const idxB = dmOrderList.indexOf(b.dm);
+        const oA = idxA === -1 ? 9999 : idxA;
+        const oB = idxB === -1 ? 9999 : idxB;
+        return oA - oB;
+    });
+    dmBody.innerHTML = dmRows.map(r => `<tr>
+        <td class="wk-sticky-1" style="font-weight:500;">${r.dm}</td>
+        ${group5(r.total.cur, r.total.yoy, r.total.yoyPct, r.total.wow, r.total.wowPct)}
+        ${group5(r.dine_in.cur, r.dine_in.yoy, r.dine_in.yoyPct, r.dine_in.wow, r.dine_in.wowPct)}
+        ${group5(r.delivery.cur, r.delivery.yoy, r.delivery.yoyPct, r.delivery.wow, r.delivery.wowPct)}
+    </tr>`).join("");
+
+    // 渲染大店长周度对比表
+    const smHead = document.getElementById("weekly-sm-head");
+    smHead.innerHTML = weeklyHead3('<th rowspan="3" class="wk-sticky-1" style="vertical-align:middle; padding:10px 8px 4px 8px; font-weight:700;">区经理</th><th rowspan="3" class="wk-sticky-2" style="vertical-align:middle; padding:10px 8px 4px 8px; font-weight:700;">大店长</th>', hp, hy, hw);
+
+    let smRows = [];
+    for (const r of rows) {
+        const hasCur = r.hasCurData;
+        const smNames = hasCur
+            ? Object.keys(r.smAgg.cur.total)
+            : Array.from(new Set([...Object.keys(r.smAgg.yoy.total), ...Object.keys(r.smAgg.wow.total)]));
+        for (const sm of smNames) {
+            const dm = r.smDmMap[sm] || "";
+            if (dmFilter && dm !== dmFilter) continue;
+            const m = ['total', 'dine_in', 'delivery'];
+            const d = {};
+            for (const k of m) {
+                d[k] = {
+                    cur: hasCur ? (r.smAgg.cur[k][sm] || 0) : 0,
+                    yoy: r.smAgg.yoy[k]?.[sm] || 0,
+                    yoyPct: hasCur && r.smAgg.yoy[k]?.[sm] ? calcChange(r.smAgg.cur[k][sm], r.smAgg.yoy[k][sm]) : null,
+                    wow: r.smAgg.wow[k]?.[sm] || 0,
+                    wowPct: hasCur && r.smAgg.wow[k]?.[sm] ? calcChange(r.smAgg.curWow[k][sm], r.smAgg.wow[k][sm]) : null,
+                };
+            }
+            smRows.push({ dm, sm, ...d });
+        }
+    }
+    // 排序：先按区经理（dm_list顺序），再按本周总杯数降序
+    smRows.sort((a, b) => {
+        const idxA = dmOrderList.indexOf(a.dm);
+        const idxB = dmOrderList.indexOf(b.dm);
+        const oA = idxA === -1 ? 9999 : idxA;
+        const oB = idxB === -1 ? 9999 : idxB;
+        if (oA !== oB) return oA - oB;
+        return b.total.cur - a.total.cur;
+    });
+    smBody.innerHTML = smRows.map(r => `<tr>
+        <td class="wk-sticky-1">${r.dm}</td>
+        <td class="wk-sticky-2" style="font-weight:500;">${r.sm}</td>
+        ${group5(r.total.cur, r.total.yoy, r.total.yoyPct, r.total.wow, r.total.wowPct)}
+        ${group5(r.dine_in.cur, r.dine_in.yoy, r.dine_in.yoyPct, r.dine_in.wow, r.dine_in.wowPct)}
+        ${group5(r.delivery.cur, r.delivery.yoy, r.delivery.yoyPct, r.delivery.wow, r.delivery.wowPct)}
+    </tr>`).join("");
+
+    // ===== 渲染单店周度对比表 =====
+    // 先填充筛选下拉
+    populateWeeklyStoreFilters();
+
+    const storeHead = document.getElementById("weekly-store-head");
+    storeHead.innerHTML = weeklyHead3('<th rowspan="3" class="wk-sticky-1" style="vertical-align:middle; padding:10px 8px 4px 8px; font-weight:700;">区经理</th><th rowspan="3" class="wk-sticky-2" style="vertical-align:middle; padding:10px 8px 4px 8px; font-weight:700;">大店长</th><th rowspan="3" class="wk-sticky-3" style="vertical-align:middle; padding:10px 8px 4px 8px; font-weight:700;">门店</th>', hp, hy, hw);
+
+    const storeBody = document.getElementById("weekly-store-body");
+    let storeRowsData = [];
+    for (const r of rows) {
+        const curS = r.storeSums.cur;
+        const yoyS = r.storeSums.yoy;
+        const wowS = r.storeSums.wow;
+
+        let storeCodes;
+        if (r.hasCurData) {
+            storeCodes = Object.keys(curS).filter(code => curS[code].total > 0);
+        } else {
+            storeCodes = Array.from(new Set([
+                ...Object.keys(yoyS).filter(code => yoyS[code].total > 0),
+                ...Object.keys(wowS).filter(code => wowS[code].total > 0)
+            ]));
+        }
+
+        for (const code of storeCodes) {
+            const si = DATA.store_info[code] || curS[code] || yoyS[code] || {};
+            const dm = si.dm || "";
+            const sm = si.sm || "";
+            const storeName = si.store_name || "";
+
+            // 筛选条件
+            if (wsSelected.dm && dm !== wsSelected.dm) continue;
+            if (wsSelected.sm && sm !== wsSelected.sm) continue;
+            if (wsSelected.store && code !== wsSelected.store) continue;
+
+            const inCommonYoy = r.commonYoyCodes.includes(code);
+            const inCommonWow = r.commonWowCodes.includes(code);
+
+            const m = ['total', 'dine_in', 'delivery'];
+            const d = {};
+            for (const k of m) {
+                const curVal = r.hasCurData ? (curS[code]?.[k] || 0) : 0;
+                const yoyVal = r.hasCurData ? (inCommonYoy ? (yoyS[code]?.[k] || 0) : 0) : (yoyS[code]?.[k] || 0);
+                const wowVal = r.hasCurData ? (inCommonWow ? (wowS[code]?.[k] || 0) : 0) : (wowS[code]?.[k] || 0);
+                d[k] = {
+                    cur: curVal,
+                    yoy: yoyVal,
+                    yoyPct: r.hasCurData && inCommonYoy && yoyVal > 0 ? calcChange(curVal, yoyVal) : null,
+                    wow: wowVal,
+                    wowPct: r.hasCurData && inCommonWow && wowVal > 0 ? calcChange(curVal, wowVal) : null,
+                };
+            }
+            storeRowsData.push({ code, dm, sm, storeName, ...d });
+        }
+    }
+
+    // 排序
+    const wsSort = (document.getElementById("sel-ws-sort") || {}).value || "structure";
+    const cmpByMetric = (a, b, key, metric) => {
+        const va = a[key]?.[metric];
+        const vb = b[key]?.[metric];
+        // null 排到末尾
+        const aNull = (va === null || va === undefined);
+        const bNull = (vb === null || vb === undefined);
+        if (aNull && bNull) return 0;
+        if (aNull) return 1;
+        if (bNull) return -1;
+        return va - vb;
+    };
+    const smOrderList = DATA.sm_list || [];
+    const dmOrderListSort = DATA.dm_list || [];
+    const wsByStructure = (a, b) => {
+        const dA = dmOrderListSort.indexOf(a.dm);
+        const dB = dmOrderListSort.indexOf(b.dm);
+        const oA = dA === -1 ? 9999 : dA;
+        const oB = dB === -1 ? 9999 : dB;
+        if (oA !== oB) return oA - oB;
+        const sA = smOrderList.indexOf(a.sm);
+        const sB = smOrderList.indexOf(b.sm);
+        const soA = sA === -1 ? 9999 : sA;
+        const soB = sB === -1 ? 9999 : sB;
+        if (soA !== soB) return soA - soB;
+        return (a.storeName || "").localeCompare(b.storeName || "", "zh");
+    };
+
+    if (wsSort === "structure") {
+        storeRowsData.sort(wsByStructure);
+    } else if (wsSort === "total_yoy_asc") {
+        storeRowsData.sort((a, b) => cmpByMetric(a, b, "total", "yoyPct") || wsByStructure(a, b));
+    } else if (wsSort === "total_yoy_desc") {
+        storeRowsData.sort((a, b) => -cmpByMetric(a, b, "total", "yoyPct") || wsByStructure(a, b));
+    }
+
+    storeBody.innerHTML = storeRowsData.length === 0
+        ? '<tr><td colspan="16" style="text-align:center;color:#999;padding:24px;">暂无数据</td></tr>'
+        : storeRowsData.map(r => `<tr>
+            <td class="wk-sticky-1">${r.dm}</td>
+            <td class="wk-sticky-2" style="font-weight:500;">${r.sm}</td>
+            <td class="wk-sticky-3" style="font-weight:500;">${r.storeName}</td>
+            ${group5(r.total.cur, r.total.yoy, r.total.yoyPct, r.total.wow, r.total.wowPct)}
+            ${group5(r.dine_in.cur, r.dine_in.yoy, r.dine_in.yoyPct, r.dine_in.wow, r.dine_in.wowPct)}
+            ${group5(r.delivery.cur, r.delivery.yoy, r.delivery.yoyPct, r.delivery.wow, r.delivery.wowPct)}
+        </tr>`).join("");
+}
+
+// ===== 单店周度对比表筛选/排序 =====
+
+// 填充下拉（级联过滤 + 门店列表）
+function populateWeeklyStoreFilters() {
+    const allStores = DATA.store_info || {};
+
+    // 统计每个区经理/大店长的门店数
+    const dmCount = {}, smCount = {};
+    for (const code in allStores) {
+        const info = allStores[code];
+        if (info.dm) dmCount[info.dm] = (dmCount[info.dm] || 0) + 1;
+        if (info.sm) smCount[info.sm] = (smCount[info.sm] || 0) + 1;
+    }
+
+    const dmList = (DATA.dm_list || []).filter(d => dmCount[d] > 0);
+    const smList = (DATA.sm_list || []).filter(s => {
+        if (!smCount[s]) return false;
+        if (wsSelected.dm) {
+            const hasStore = Object.values(allStores).some(i => i.sm === s && i.dm === wsSelected.dm);
+            if (!hasStore) return false;
+        }
+        return true;
+    });
+
+    // 区经理下拉
+    const dmSel = document.getElementById("ws-select-dm");
+    dmSel.innerHTML = `<option value="">全部 (${dmList.length})</option>` +
+        dmList.map(dm => `<option value="${dm}" ${wsSelected.dm === dm ? "selected" : ""}>${dm} (${dmCount[dm]})</option>`).join("");
+
+    // 大店长下拉
+    const smSel = document.getElementById("ws-select-sm");
+    smSel.innerHTML = `<option value="">全部 (${smList.length})</option>` +
+        smList.map(sm => `<option value="${sm}" ${wsSelected.sm === sm ? "selected" : ""}>${sm} (${smCount[sm]})</option>`).join("");
+
+    // 门店列表（级联）
+    wsStoreList = Object.keys(allStores);
+    if (wsSelected.dm) wsStoreList = wsStoreList.filter(c => allStores[c].dm === wsSelected.dm);
+    if (wsSelected.sm) wsStoreList = wsStoreList.filter(c => allStores[c].sm === wsSelected.sm);
+
+    // 更新标签
+    document.getElementById("ws-count-dm").textContent = wsSelected.dm ? `(${wsSelected.dm})` : "(全部)";
+    document.getElementById("ws-count-sm").textContent = wsSelected.sm ? `(${wsSelected.sm})` : "(全部)";
+    const storeInfo = wsSelected.store ? allStores[wsSelected.store] : null;
+    document.getElementById("ws-count-store").textContent = wsSelected.store ? `(${storeInfo?.store_name || wsSelected.store})` : "(全部)";
+
+    // 同步输入框
+    const input = document.getElementById("ws-store-input");
+    if (wsSelected.store) {
+        input.value = storeInfo?.store_name || wsSelected.store;
+        input.classList.add("has-value");
+    } else {
+        if (document.activeElement !== input) {
+            input.value = "";
+            input.classList.remove("has-value");
+        }
+    }
+}
+
+// select 变化回调
+function onWeeklyStoreSelectChange() {
+    wsSelected.dm = document.getElementById("ws-select-dm").value;
+    wsSelected.sm = document.getElementById("ws-select-sm").value;
+    // 若已选门店不在级联范围内，清空门店选择
+    if (wsSelected.store) {
+        const info = DATA.store_info[wsSelected.store];
+        if (!info) {
+            wsSelected.store = "";
+        } else {
+            if (wsSelected.dm && info.dm !== wsSelected.dm) wsSelected.store = "";
+            else if (wsSelected.sm && info.sm !== wsSelected.sm) wsSelected.store = "";
+        }
+    }
+    populateWeeklyStoreFilters();
+    renderWeekly();
+}
+
+// 门店 combobox
+function wsRenderStoreDropdown(keyword) {
+    const dropdown = document.getElementById("ws-store-dropdown");
+    const allStores = DATA.store_info || {};
+    const kw = (keyword || "").trim().toLowerCase();
+    let items = wsStoreList.map(code => ({ code, name: allStores[code]?.store_name || code, dm: allStores[code]?.dm || "", sm: allStores[code]?.sm || "" }));
+    if (kw) {
+        items = items.filter(i => i.name.toLowerCase().includes(kw) || i.code.toLowerCase().includes(kw) || i.dm.toLowerCase().includes(kw) || i.sm.toLowerCase().includes(kw));
+    }
+    items.sort((a, b) => (a.dm + a.sm + a.name).localeCompare(b.dm + b.sm + b.name, "zh"));
+
+    if (items.length === 0) {
+        dropdown.innerHTML = `<div class="dd-combobox-empty">无匹配门店</div>`;
+        return;
+    }
+    dropdown.innerHTML = items.map(i => {
+        const sel = wsSelected.store === i.code ? " selected" : "";
+        return `<div class="dd-combobox-item${sel}" onclick="wsPickStore('${i.code}')">${i.name}<span class="dd-item-sub">${i.dm} / ${i.sm}</span></div>`;
+    }).join("");
+}
+
+function wsOpenStoreDropdown() {
+    const input = document.getElementById("ws-store-input");
+    const dropdown = document.getElementById("ws-store-dropdown");
+    if (!wsSelected.store) {
+        input.value = "";
+        input.classList.remove("has-value");
+    }
+    wsRenderStoreDropdown(input.value);
+    dropdown.classList.add("open");
+}
+
+function wsOnStoreInput() {
+    wsRenderStoreDropdown(document.getElementById("ws-store-input").value);
+}
+
+function wsCloseStoreDropdown() {
+    document.getElementById("ws-store-dropdown").classList.remove("open");
+}
+
+function wsPickStore(code) {
+    wsSelected.store = code;
+    wsCloseStoreDropdown();
+    populateWeeklyStoreFilters();
+    renderWeekly();
+}
+
+function wsClearStore() {
+    wsSelected.store = "";
+    const input = document.getElementById("ws-store-input");
+    input.value = "";
+    input.classList.remove("has-value");
+    populateWeeklyStoreFilters();
+    renderWeekly();
+}
+
+// 清空筛选
+function clearWeeklyStoreFilters() {
+    wsSelected.dm = "";
+    wsSelected.sm = "";
+    wsSelected.store = "";
+    document.getElementById("sel-ws-sort").value = "structure";
+    populateWeeklyStoreFilters();
+    renderWeekly();
+}
+
+// 绑定门店 combobox 事件
+function bindWsStoreCombobox() {
+    const input = document.getElementById("ws-store-input");
+    const combobox = document.getElementById("ws-store-combobox");
+    if (!input) return;
+    input.addEventListener("focus", wsOpenStoreDropdown);
+    input.addEventListener("input", () => wsRenderStoreDropdown(input.value));
+    document.getElementById("ws-store-clear").addEventListener("click", wsClearStore);
+    document.addEventListener("click", (e) => {
+        if (!combobox.contains(e.target)) wsCloseStoreDropdown();
+    });
+}
+
+// ===== 异常预警 =====
+function renderAlert() {
+    const alertDate = document.getElementById("sel-date-alert").value;
+    const dmFilter = document.getElementById("sel-dm-alert").value;
+
+    if (!alertDate || !DATA.current_data[alertDate]) {
+        document.getElementById("alert-cards").innerHTML = '<div class="no-data" style="grid-column:span 5;">暂无数据</div>';
+        document.getElementById("alert-list").innerHTML = '<div class="no-data">暂无数据</div>';
+        return;
+    }
+
+    const mapping = DATA.date_mapping[alertDate];
+    if (!mapping) return;
+
+    const curStores = DATA.current_data[alertDate];
+    const yoyStores = DATA.yoy_data[mapping.yoy_date] || {};
+    const wowStores = lookupWowDateData(mapping.wow_date);
+
+    const activeCodes = Object.keys(curStores).filter(code => curStores[code].total > 0);
+
+    const alerts = [];
+    let doubleDown = 0, onlyYoyDown = 0, onlyWowDown = 0, normal = 0;
+
+    for (const code of activeCodes) {
+        const cur = curStores[code];
+        const info = DATA.store_info[code] || cur;
+        if (dmFilter && info.dm !== dmFilter) continue;
+
+        const yoy = yoyStores[code] || null;
+        const wow = wowStores[code] || null;
+        const yoyPct = yoy && yoy.total > 0 ? calcChange(cur.total, yoy.total) : null;
+        const wowPct = wow && wow.total > 0 ? calcChange(cur.total, wow.total) : null;
+
+        const yoyDown = yoyPct !== null && yoyPct < 0;
+        const wowDown = wowPct !== null && wowPct < 0;
+
+        let category = "normal";
+        if (yoyDown && wowDown) { category = "double_down"; doubleDown++; }
+        else if (yoyDown) { category = "yoy_down"; onlyYoyDown++; }
+        else if (wowDown) { category = "wow_down"; onlyWowDown++; }
+        else { normal++; }
+
+        alerts.push({
+            dm: info.dm || "",
+            sm: info.sm || "",
+            store_name: info.store_name || "",
+            total: cur.total,
+            yoy_pct: yoyPct,
+            wow_pct: wowPct,
+            category,
+            sortKey: category === "double_down" ? 0 : 1,
+        });
+    }
+
+    // 排序：双降排最前，再按降幅从大到小
+    alerts.sort((a, b) => {
+        if (a.sortKey !== b.sortKey) return a.sortKey - b.sortKey;
+        const aPct = a.yoy_pct !== null ? a.yoy_pct : 0;
+        const bPct = b.yoy_pct !== null ? b.yoy_pct : 0;
+        return aPct - bPct;
+    });
+
+    // 渲染汇总卡片
+    document.getElementById("alert-cards").innerHTML = `
+        <div class="card negative">
+            <div class="card-title">🔴 双降门店</div>
+            <div class="card-value">${doubleDown}</div>
+            <div class="card-sub">同比+环比均下滑（高优先级）</div>
+        </div>
+        <div class="card" style="border-left-color:#e67e22;">
+            <div class="card-title">仅同比下滑</div>
+            <div class="card-value">${onlyYoyDown}</div>
+        </div>
+        <div class="card" style="border-left-color:#e67e22;">
+            <div class="card-title">仅环比下滑</div>
+            <div class="card-value">${onlyWowDown}</div>
+        </div>
+        <div class="card" style="border-left-color:#888;">
+            <div class="card-title">异常门店合计</div>
+            <div class="card-value">${doubleDown + onlyYoyDown + onlyWowDown}</div>
+        </div>
+        <div class="card positive">
+            <div class="card-title">🟢 正常门店</div>
+            <div class="card-value">${normal}</div>
+            <div class="card-sub">同比环比均为正</div>
+        </div>
+    `;
+
+    // 渲染异常门店列表
+    let html = "";
+    for (const a of alerts) {
+        if (a.category === "normal") continue;
+
+        let badgeClass = "";
+        let badgeText = "";
+        if (a.category === "double_down") {
+            badgeClass = "badge-red";
+            badgeText = "🔴 双降";
+        } else {
+            badgeClass = "badge-orange";
+            badgeText = "🟠 单降";
+        }
+
+        html += `<div class="alert-item">
+            <span class="alert-badge"><span class="badge ${badgeClass}">${badgeText}</span></span>
+            <span class="alert-store">${a.store_name}</span>
+            <span class="alert-info">${a.dm} / ${a.sm}</span>
+            <span class="alert-info">当日 ${fmtNum(a.total)} 杯</span>
+            <span class="alert-info ${pctClass(a.yoy_pct)}">同比 ${fmtPct(a.yoy_pct)}</span>
+            <span class="alert-info ${pctClass(a.wow_pct)}">环比 ${fmtPct(a.wow_pct)}</span>
+        </div>`;
+    }
+
+    if (!html) {
+        html = '<div class="no-data">所有门店均正常 🎉</div>';
+    }
+
+    document.getElementById("alert-list").innerHTML = html;
+}
+
+// ===== 启动 =====
+window.addEventListener("DOMContentLoaded", init);
+</script>
+</body>
+</html>"""
+
+
+def generate_html(data, output_path, external_data=False):
+    """从JSON数据生成HTML看板
+
+    Args:
+        data: 看板数据dict
+        output_path: 输出HTML文件路径
+        external_data: 是否生成从外部JSON加载数据的HTML
+    """
+    html = HTML_TEMPLATE
+
+    if external_data:
+        # 外部数据模式：HTML从 ./dashboard_data.json 加载数据
+        # 替换数据初始化代码为异步加载版本
+        data_init_code = (
+            'let DATA = null;\n'
+            'async function loadDashboardData() {\n'
+            '    try {\n'
+            "        const resp = await fetch('./dashboard_data.json?_t=' + Date.now());\n"
+            '        if (!resp.ok) throw new Error("HTTP " + resp.status);\n'
+            '        DATA = await resp.json();\n'
+            '        // 数据加载完成后初始化看板\n'
+            '        init();\n'
+            '    } catch (e) {\n'
+            "        document.getElementById('loading').textContent = '⚠️ 加载数据失败，请确保 dashboard_data.json 与HTML在同一目录下';\\n"
+            '        console.error("Failed to load dashboard data:", e);\n'
+            '    }\n'
+            '}\n'
+            'loadDashboardData();\n'
+        )
+        html = html.replace("const DATA = __DATA_PLACEHOLDER__;", data_init_code)
+        # 移除直接调用 init() 的代码（改为在 loadDashboardData 中调用）
+        html = html.replace('\ninit();\n', '\n// init() called after data load\n')
+    else:
+        # 当前行为：内嵌数据
+        json_str = json.dumps(data, ensure_ascii=False)
+        html = html.replace("__DATA_PLACEHOLDER__", json_str)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    if external_data:
+        # 同时输出 dashboard_data.json
+        json_path = os.path.join(os.path.dirname(output_path), 'dashboard_data.json')
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        print(f"  外部数据文件: {json_path}")
+
+    return output_path
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="生成7月杯数看板HTML")
+    parser.add_argument("json_path", help="JSON数据文件路径")
+    parser.add_argument("--external-data", action="store_true",
+                        help="生成从外部dashboard_data.json加载数据的HTML（便于固定URL部署）")
+    args = parser.parse_args()
+
+    if not os.path.exists(args.json_path):
+        print(f"JSON文件不存在: {args.json_path}")
+        sys.exit(1)
+
+    with open(args.json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # 输出HTML到与JSON同目录
+    script_dir = os.path.dirname(os.path.abspath(args.json_path))
+    html_path = os.path.join(script_dir, "7月杯数看板.html")
+
+    generate_html(data, html_path, external_data=args.external_data)
+    print(f"看板已生成: {html_path}")
+    if args.external_data:
+        print(f"数据文件也已生成: {os.path.join(script_dir, 'dashboard_data.json')}")
+        print("提示: 将HTML和JSON文件放到同一目录下，访问HTML即可自动加载最新数据")
+
+
+if __name__ == "__main__":
+    main()
