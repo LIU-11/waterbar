@@ -5,3 +5,4 @@ __pycache__/
 ~$*
 github_token.txt
 config.json
+temp_excel.xlsx
