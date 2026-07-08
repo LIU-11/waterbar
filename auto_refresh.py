@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 auto_refresh.py - 看板数据自动刷新脚本
-从Excel提取数据 -> 生成JSON+HTML -> 推送GitHub
+从Excel提取数据 -> 生成内嵌HTML -> 复制到deploy_dist/
 
 使用方法:
   1. 自动模式: python auto_refresh.py
      (自动查找桌面上最新的 7月杯数达成看板-墨柠.xlsx)
   2. 指定文件: python auto_refresh.py "C:/path/to/file.xlsx"
 """
-import os, sys, json, glob, time, importlib.util
+import os, sys, json, glob, time, shutil, importlib.util
 from datetime import datetime
 
 # ==================== 配置 ====================
@@ -17,21 +17,14 @@ DESKTOP_DIR = os.path.join(os.path.expanduser("~"), "Desktop")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_JSON = os.path.join(REPO_DIR, "dashboard_data.json")
 INDEX_HTML = os.path.join(REPO_DIR, "index.html")
+DEPLOY_DIR = os.path.join(REPO_DIR, "..", "deploy_dist")
+DEPLOY_HTML = os.path.join(DEPLOY_DIR, "index.html")
 UPDATE_SCRIPT = os.path.join(REPO_DIR, "update_dashboard.py")
 GEN_SCRIPT = os.path.join(REPO_DIR, "gen_dashboard.py")
 XLSX_FILENAME = "7月杯数达成看板-墨柠.xlsx"
 
-# GitHub 配置
-GITHUB_USERNAME = "LIU-11"
-REPO_NAME = "waterbar"
-GITHUB_PAGES_URL = f"https://{GITHUB_USERNAME}.github.io/{REPO_NAME}/"
-
-# Token 从 github_token.txt 读取（该文件已 gitignore，不会推送到 GitHub）
-_TOKEN_FILE = os.path.join(REPO_DIR, "github_token.txt")
-GITHUB_TOKEN = ""
-if os.path.exists(_TOKEN_FILE):
-    with open(_TOKEN_FILE, "r", encoding="utf-8") as _f:
-        GITHUB_TOKEN = _f.read().strip()
+# CloudStudio 部署链接
+CLOUDSTUDIO_URL = "https://48172fff7d584b119950fc79bd435fb6.app.codebuddy.work"
 
 # 日志文件
 LOG_FILE = os.path.join(REPO_DIR, "auto_refresh.log")
@@ -67,7 +60,6 @@ def wait_file_ready(filepath, timeout=30):
     start = time.time()
     while time.time() - start < timeout:
         try:
-            # 尝试以追加模式打开（如果文件被锁定会失败）
             with open(filepath, "a"):
                 pass
             return True
@@ -77,7 +69,7 @@ def wait_file_ready(filepath, timeout=30):
 
 
 def update_data(xlsx_path):
-    """从Excel提取数据，生成JSON和HTML"""
+    """从Excel提取数据，生成内嵌HTML"""
     log(f"正在处理: {xlsx_path}")
 
     if not os.path.exists(UPDATE_SCRIPT):
@@ -103,78 +95,25 @@ def update_data(xlsx_path):
         log(f"数据提取失败: {e}", "ERROR")
         return False
 
-    # 2. 加载 gen_dashboard 模块，生成外部数据模式的 HTML + JSON
+    # 2. 加载 gen_dashboard 模块，生成内嵌数据模式的 HTML（无fetch）
     try:
         spec2 = importlib.util.spec_from_file_location("gen_dashboard", GEN_SCRIPT)
         gen_mod = importlib.util.module_from_spec(spec2)
         spec2.loader.exec_module(gen_mod)
-        gen_mod.generate_html(data, INDEX_HTML, external_data=True)
-        log(f"HTML+JSON 生成完成: {INDEX_HTML}")
+        gen_mod.generate_html(data, INDEX_HTML, external_data=False)
+        log(f"内嵌HTML生成完成: {INDEX_HTML}")
     except Exception as e:
         log(f"HTML生成失败: {e}", "ERROR")
         return False
 
-    return True
-
-
-def push_to_github():
-    """通过GitHub API推送 index.html 和 dashboard_data.json"""
-    if not GITHUB_TOKEN:
-        log("未配置GITHUB_TOKEN，跳过推送（数据已更新到本地）", "WARN")
-        log(f"请手动查看: {INDEX_HTML}")
+    # 3. 复制到 deploy_dist/ 供 CloudStudio 部署
+    try:
+        os.makedirs(DEPLOY_DIR, exist_ok=True)
+        shutil.copy2(INDEX_HTML, DEPLOY_HTML)
+        log(f"已复制到部署目录: {DEPLOY_HTML}")
+    except Exception as e:
+        log(f"复制到部署目录失败: {e}", "ERROR")
         return False
-
-    import base64, urllib.request
-
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github+json",
-    }
-
-    files_to_push = [
-        (INDEX_HTML, "index.html"),
-        (DATA_JSON, "dashboard_data.json"),
-    ]
-
-    for local_path, repo_path in files_to_push:
-        if not os.path.exists(local_path):
-            log(f"文件不存在: {local_path}", "ERROR")
-            continue
-
-        # 读取文件内容并编码
-        with open(local_path, "rb") as f:
-            content = base64.b64encode(f.read()).decode("ascii")
-
-        # 获取当前文件SHA（已存在的文件需要SHA才能更新）
-        url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{repo_path}"
-        sha = None
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req) as resp:
-                sha = json.loads(resp.read()).get("sha")
-        except Exception:
-            pass  # 文件不存在，是新建
-
-        # 上传文件
-        payload = json.dumps({
-            "message": f"自动刷新 {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            "content": content,
-            "sha": sha,
-            "branch": "main"
-        }).encode("utf-8")
-
-        req2 = urllib.request.Request(
-            url, data=payload,
-            headers={**headers, "Content-Type": "application/json"},
-            method="PUT"
-        )
-        try:
-            with urllib.request.urlopen(req2) as resp:
-                result = json.loads(resp.read())
-                log(f"推送成功: {repo_path} ({len(content)} bytes)")
-        except Exception as e:
-            log(f"推送失败: {repo_path} - {e}", "ERROR")
-            return False
 
     return True
 
@@ -192,15 +131,12 @@ def main():
         log(f"未找到xlsx文件，请在桌面放置 {XLSX_FILENAME}", "ERROR")
         return 1
 
-    # 2. 更新数据
-    if not update_data(xlsx_path):
-        return 1
-
-    # 3. 推送到GitHub
-    if push_to_github():
-        log(f"=== 刷新完成！访问: {GITHUB_PAGES_URL} ===")
+    # 2. 更新数据 + 生成内嵌HTML + 复制到deploy_dist
+    if update_data(xlsx_path):
+        log(f"=== 刷新完成！CloudStudio部署由WorkBuddy自动化处理 ===")
+        log(f"访问: {CLOUDSTUDIO_URL}")
     else:
-        log("数据已更新到本地，但推送GitHub失败", "WARN")
+        log("刷新失败", "ERROR")
 
     return 0
 
